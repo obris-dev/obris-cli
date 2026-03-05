@@ -21,6 +21,8 @@ def _get_app_base():
 
 
 def _osascript_notify(title, message):
+    title = title.replace('"', '\\"')
+    message = message.replace('"', '\\"')
     subprocess.run([
         "osascript", "-e",
         f'display notification "{message}" with title "{title}"',

@@ -2,10 +2,11 @@ from pathlib import Path
 
 import click
 
-from obris import capture, config, notify, topics, uploader
+from obris import __version__, capture, config, notify, topics, uploader
 
 
 @click.group()
+@click.version_option(__version__, prog_name="obris")
 def cli():
     """Obris CLI — capture and upload to your personal context layer."""
 

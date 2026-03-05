@@ -28,7 +28,7 @@ def auth(key, base):
         click.echo("API key saved, but failed to fetch topics.")
         return
 
-    scratch = next((t for t in all_topics if t.get("name") == "Scratch"), None)
+    scratch = next((t for t in all_topics if t.get("name") == "Scratch" and t.get("is_system")), None)
     if scratch:
         cfg["scratch_topic_id"] = scratch["id"]
         config.save(cfg)

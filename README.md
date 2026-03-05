@@ -29,7 +29,8 @@ uv run obris auth --key <your-api-key> --base http://localhost:8000  # local dev
 uv run obris capture                              # screenshot + upload to Scratch
 uv run obris capture --prompt                     # prompt for a name via dialog
 uv run obris capture --name "my pic"              # explicit name
-uv run obris upload <file> --topic <id>
+uv run obris upload <file>                        # upload to Scratch
+uv run obris upload <file> --topic <id>           # upload to specific topic
 
 uv run obris topic list                           # list all topics
 uv run obris topic list <topic_id>                # list knowledge in a topic

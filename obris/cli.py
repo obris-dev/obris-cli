@@ -76,12 +76,13 @@ def capture_cmd(cap_name, prompt_name, topic):
 
 @cli.command()
 @click.argument("filepath", type=click.Path(exists=True, path_type=Path))
-@click.option("--topic", required=True, help="Topic ID")
+@click.option("--topic", default=None, help="Topic ID (defaults to Scratch)")
 @click.option("--name", default=None, help="Display name (defaults to filename)")
 def upload(filepath, topic, name):
     """Upload a file to a topic."""
+    topic_id = topic or config.get_scratch_topic_id()
     name = name or filepath.name
-    result = uploader.upload_file(topic, filepath, name)
+    result = uploader.upload_file(topic_id, filepath, name)
     click.echo(f"Uploaded '{result.get('title', name)}'")
     click.echo(f"  ID: {result['id']}")
 

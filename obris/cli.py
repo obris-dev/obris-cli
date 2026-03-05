@@ -32,7 +32,7 @@ def auth(key):
         return
 
     if len(results) > 1:
-        raise SystemExit(f"[{env}] Multiple Scratch system topics found — this shouldn't happen. Contact support.")
+        raise SystemExit(f"[{env}] Multiple Scratch system topics found — this shouldn't happen. Contact dev@obris.ai.")
     elif results:
         cfg[env]["scratch_topic_id"] = results[0]["id"]
         config.save(cfg)

@@ -33,4 +33,4 @@ Open an issue on [GitHub](https://github.com/obris-dev/obris-cli/issues) with:
 
 ## Questions?
 
-Reach out at [support@obris.ai](mailto:support@obris.ai).
+Reach out at [dev@obris.ai](mailto:dev@obris.ai).

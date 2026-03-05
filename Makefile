@@ -3,4 +3,4 @@
 publish:
 	rm -rf dist/
 	uv build
-	uv publish
+	@UV_PUBLISH_PASSWORD=$(OBRIS_CLI_PYPI_TOKEN) uv publish

@@ -18,6 +18,9 @@ dependencies = [
 [project.scripts]
 obris = "obris.cli:cli"
 
+[tool.hatch.build.targets.wheel]
+packages = ["obris"]
+
 [project.urls]
 Homepage = "https://obris.ai"
 Repository = "https://github.com/obris-dev/obris-cli"

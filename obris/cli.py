@@ -26,16 +26,17 @@ def auth(key):
 
     # Find the Scratch topic
     try:
-        all_topics = topics.list_topics()
+        results = topics.list_topics(name="Scratch", is_system=True)
     except SystemExit:
         click.echo(f"[{env}] API key saved, but failed to fetch topics.")
         return
 
-    scratch = next((t for t in all_topics if t.get("name") == "Scratch" and t.get("is_system")), None)
-    if scratch:
-        cfg[env]["scratch_topic_id"] = scratch["id"]
+    if len(results) > 1:
+        raise SystemExit(f"[{env}] Multiple Scratch system topics found — this shouldn't happen. Contact support.")
+    elif results:
+        cfg[env]["scratch_topic_id"] = results[0]["id"]
         config.save(cfg)
-        click.echo(f"[{env}] Authenticated. Scratch topic: {scratch['id']}")
+        click.echo(f"[{env}] Authenticated. Scratch topic: {results[0]['id']}")
     else:
         click.echo(f"[{env}] Authenticated. No 'Scratch' topic found — create one in the app.")
 

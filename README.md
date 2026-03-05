@@ -13,7 +13,7 @@ pip install obris-cli
 Or run directly with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uvx obris-cli --help
+uvx --from obris-cli obris --help
 ```
 
 ### Optional: macOS notifications

@@ -39,23 +39,13 @@ def auth(key, base):
 
 @cli.command("capture")
 @click.option("--name", "cap_name", default=None, help="Display name for the capture")
-@click.option("--auto-name", "auto", is_flag=True, help="Auto-generate a timestamped name")
 @click.option("--topic", default=None, help="Topic ID (defaults to Scratch)")
-def capture_cmd(cap_name, auto, topic):
+def capture_cmd(cap_name, topic):
     """Take a screenshot and upload it."""
     topic_id = topic or config.get_scratch_topic_id()
 
     path = capture.take_screenshot()
-
-    if cap_name:
-        name = cap_name
-    elif auto:
-        name = capture.auto_name()
-    else:
-        name = capture.prompt_name()
-
-    if not name:
-        raise SystemExit("Name is required.")
+    name = cap_name or path.stem
 
     result = uploader.upload_file(topic_id, path, name)
     click.echo(f"Uploaded '{result.get('title', name)}'")

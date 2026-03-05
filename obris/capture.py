@@ -6,7 +6,9 @@ from pathlib import Path
 
 
 def take_screenshot():
-    path = Path(tempfile.gettempdir()) / "obris_capture.png"
+    timestamp = datetime.now().strftime("%Y-%m-%d at %H.%M.%S")
+    filename = f"capture {timestamp}.png"
+    path = Path(tempfile.gettempdir()) / filename
 
     if sys.platform == "darwin":
         cmd = ["screencapture", "-i", str(path)]
@@ -45,7 +47,3 @@ def prompt_name():
         import click
 
         return click.prompt("Name this capture")
-
-
-def auto_name():
-    return datetime.now().strftime("ObrisCapture %Y-%m-%d at %H.%M.%S")

@@ -14,8 +14,13 @@ def _unwrap(data):
     return data
 
 
-def list_topics():
-    resp = requests.get(f"{get_api_base()}/v1/topics", headers=_headers())
+def list_topics(*, name=None, is_system=None):
+    params = {}
+    if name is not None:
+        params["name"] = name
+    if is_system is not None:
+        params["is_system"] = str(is_system).lower()
+    resp = requests.get(f"{get_api_base()}/v1/topics", headers=_headers(), params=params)
     if not resp.ok:
         raise SystemExit(f"Failed to list topics ({resp.status_code}): {resp.text}")
     return _unwrap(resp.json())

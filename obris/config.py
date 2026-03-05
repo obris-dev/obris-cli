@@ -50,7 +50,7 @@ def get_api_key():
     key = _env_data().get("api_key")
     env = get_active_env()
     if not key:
-        raise SystemExit(f"Not authenticated for '{env}'. Run: obris auth --key <key> --env {env}")
+        raise SystemExit(f"Not authenticated for '{env}'. Run: obris --env {env} auth --key <key>")
     return key
 
 
@@ -68,5 +68,5 @@ def get_scratch_topic_id():
     tid = _env_data().get("scratch_topic_id")
     env = get_active_env()
     if not tid:
-        raise SystemExit(f"No scratch topic configured for '{env}'. Run: obris auth --key <key> --env {env}")
+        raise SystemExit(f"No scratch topic configured for '{env}'. Run: obris --env {env} auth --key <key>")
     return tid

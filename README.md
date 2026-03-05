@@ -38,6 +38,29 @@ obris auth --key <your-api-key>
 
 This saves your key locally to `~/.obris/config.json` and detects your Scratch topic (the default destination for captures).
 
+### Environments
+
+You can configure separate API keys for `prod` and `dev` side by side:
+
+```bash
+obris auth --key <prod-key>              # saves to prod (default)
+obris --env dev auth --key <dev-key>     # saves to dev
+```
+
+Use `--env` on any command to override the active environment:
+
+```bash
+obris --env dev capture
+obris --env dev topic list
+```
+
+Set the default environment:
+
+```bash
+obris env dev    # switch default to dev
+obris env        # show current default
+```
+
 ## Usage
 
 ### Capture a screenshot
@@ -111,7 +134,7 @@ uv sync
 Run commands locally without installing:
 
 ```bash
-uv run obris auth --key <your-api-key> --base http://localhost:8000
+uv run obris --env dev auth --key <your-api-key>
 uv run obris capture
 uv run obris topic list
 ```

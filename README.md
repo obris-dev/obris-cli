@@ -34,3 +34,21 @@ uv run obris topics list
 uv run obris scratch list
 uv run obris move <knowledge_id> --topic <id>
 ```
+
+## Hotkeys (Alfred)
+
+Create an Alfred workflow with a **Hotkey** trigger connected to a **Run Script** action (language: `/bin/zsh`).
+
+### Quick Capture
+
+```zsh
+<path/to/uv> --directory <path/to/obris-cli> run obris capture
+```
+
+### Capture with Name Prompt
+
+```zsh
+<path/to/uv> --directory <path/to/obris-cli> run obris capture --prompt
+```
+
+> **Tip:** Use full paths since Alfred doesn't load your shell profile. Run `which uv` to find your uv path.

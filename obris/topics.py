@@ -30,9 +30,17 @@ def list_knowledge(topic_id):
     return _unwrap(resp.json())
 
 
+def delete_knowledge(knowledge_id):
+    resp = requests.delete(
+        f"{get_api_base()}/v1/knowledge/detail/{knowledge_id}", headers=_headers()
+    )
+    if not resp.ok:
+        raise SystemExit(f"Delete failed ({resp.status_code}): {resp.text}")
+
+
 def move_knowledge(knowledge_id, topic_id):
     resp = requests.post(
-        f"{get_api_base()}/v1/knowledge/{knowledge_id}/move",
+        f"{get_api_base()}/v1/knowledge/detail/{knowledge_id}/move",
         headers=_headers(),
         json={"topic_id": topic_id},
     )

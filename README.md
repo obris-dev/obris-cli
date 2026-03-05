@@ -6,7 +6,7 @@ Capture and upload client for the Obris API.
 
 Requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
-For macOS notifications with the Obris icon:
+For macOS notifications with deep linking to uploaded content:
 
 ```
 brew install terminal-notifier

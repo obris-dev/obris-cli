@@ -1,6 +1,6 @@
 # Obris CLI
 
-A command-line tool for capturing screenshots and managing knowledge in [Obris](https://obris.ai) — your personal knowledge layer for AI. Save content to organized topics so you never start another AI chat from zero again.
+A command-line tool for capturing screenshots and managing knowledge in [Obris](https://obris.ai), your personal knowledge layer for AI. Save content to organized topics so you never start another AI chat from zero again.
 
 ## Install
 
@@ -96,9 +96,9 @@ Create a workflow with a **Hotkey** trigger connected to a **Run Script** action
 
 | Platform | Capture | Upload / Topics / Knowledge |
 |----------|---------|----------------------------|
-| macOS    | Yes (`screencapture`) | Yes |
-| Linux    | Yes (`scrot`)         | Yes |
-| Windows  | Not yet | Yes |
+| macOS    | Yes | Yes |
+| Linux    | Yes | Yes |
+| Windows  | No  | Yes |
 
 ## Development
 
@@ -114,6 +114,12 @@ Run commands locally without installing:
 uv run obris auth --key <your-api-key> --base http://localhost:8000
 uv run obris capture
 uv run obris topic list
+```
+
+### Publishing
+
+```bash
+make publish   # build and publish to PyPI
 ```
 
 ## Privacy Policy

@@ -6,6 +6,12 @@ Capture and upload client for the Obris API.
 
 Requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
+For macOS notifications with the Obris icon:
+
+```
+brew install terminal-notifier
+```
+
 ```
 uv run obris --help
 ```
@@ -14,13 +20,15 @@ uv run obris --help
 
 ```
 uv run obris auth --key <your-api-key>
+uv run obris auth --key <your-api-key> --base http://localhost:8000  # local dev
 ```
 
 ## Commands
 
 ```
 uv run obris capture                  # screenshot + upload to Scratch
-uv run obris capture --auto-name      # auto-generate name
+uv run obris capture --prompt         # prompt for a name via dialog
+uv run obris capture --name "my pic"  # explicit name
 uv run obris upload <file> --topic <id>
 uv run obris topics list
 uv run obris scratch list

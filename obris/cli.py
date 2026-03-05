@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from obris import capture, config, topics, uploader
+from obris import capture, config, notify, topics, uploader
 
 
 @click.group()
@@ -39,15 +39,35 @@ def auth(key, base):
 
 @cli.command("capture")
 @click.option("--name", "cap_name", default=None, help="Display name for the capture")
+@click.option("--prompt", "prompt_name", is_flag=True, help="Prompt for a name via dialog")
 @click.option("--topic", default=None, help="Topic ID (defaults to Scratch)")
-def capture_cmd(cap_name, topic):
+def capture_cmd(cap_name, prompt_name, topic):
     """Take a screenshot and upload it."""
     topic_id = topic or config.get_scratch_topic_id()
 
-    path = capture.take_screenshot()
-    name = cap_name or path.stem
+    try:
+        path = capture.take_screenshot()
+    except SystemExit:
+        notify.send("Obris", "Screenshot cancelled")
+        raise
 
-    result = uploader.upload_file(topic_id, path, name)
+    if cap_name:
+        name = cap_name
+    elif prompt_name:
+        name = capture.prompt_name()
+        if not name:
+            raise SystemExit("Name is required.")
+    else:
+        name = path.stem
+    notify.send_quiet("Obris", "Uploading...")
+
+    try:
+        result = uploader.upload_file(topic_id, path, name)
+    except SystemExit as e:
+        notify.send("Obris", f"Upload failed")
+        raise
+
+    notify.send("Obris", f"Uploaded '{result.get('title', name)}'", url=notify.topic_url(topic_id))
     click.echo(f"Uploaded '{result.get('title', name)}'")
     click.echo(f"  ID: {result['id']}")
 

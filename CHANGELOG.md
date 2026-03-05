@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- Configure `prod` and `dev` API keys side by side in `~/.obris/config.json`
+- `--env` flag on any command to override the active environment
+- `obris env [name]` command to show or set the default environment
+- Replace `--base` flag with environment-based config
+
 ## 0.1.0 — 2025-03-05
 
 Initial public release.

@@ -5,19 +5,7 @@ from pathlib import Path
 
 ICON_PATH = str(Path(__file__).parent / "assets" / "icon.png")
 
-# api.obris.ai -> app.obris.ai, localhost:8000 -> localhost:3001
-APP_BASE_MAP = {
-    "https://api.obris.ai": "https://app.obris.ai",
-    "http://localhost:8000": "http://localhost:3001",
-}
-
 _has_notifier = sys.platform == "darwin" and shutil.which("terminal-notifier") is not None
-
-
-def _get_app_base():
-    from obris.config import get_api_base
-    api_base = get_api_base()
-    return APP_BASE_MAP.get(api_base, api_base.replace("api.", "app."))
 
 
 def _osascript_notify(title, message):
@@ -69,4 +57,5 @@ def send_quiet(title, message):
 
 
 def topic_url(topic_id):
-    return f"{_get_app_base()}/topics/{topic_id}"
+    from obris.config import get_app_base
+    return f"{get_app_base()}/topics/{topic_id}"

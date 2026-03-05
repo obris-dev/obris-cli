@@ -7,35 +7,51 @@ from obris import __version__, capture, config, notify, topics, uploader
 
 @click.group()
 @click.version_option(__version__, prog_name="obris")
-def cli():
+@click.option("--env", default=None, type=click.Choice(list(config.ENVIRONMENTS)), help="Environment override (default: prod)")
+def cli(env):
     """Obris CLI — capture and upload to your personal context layer."""
+    if env:
+        config.set_active_env(env)
 
 
 @cli.command()
 @click.option("--key", required=True, help="Your Obris API key")
-@click.option("--base", default=None, help="API base URL (e.g. http://localhost:8000)")
-def auth(key, base):
+def auth(key):
     """Save API key and detect scratch topic."""
+    env = config.get_active_env()
     cfg = config.load()
-    cfg["api_key"] = key
-    if base:
-        cfg["api_base"] = base.rstrip("/")
+    cfg.setdefault(env, {})
+    cfg[env]["api_key"] = key
     config.save(cfg)
 
     # Find the Scratch topic
     try:
-        all_topics = topics.list_topics()
+        results = topics.list_topics(name="Scratch", is_system=True)
     except SystemExit:
-        click.echo("API key saved, but failed to fetch topics.")
+        click.echo(f"[{env}] API key saved, but failed to fetch topics.")
         return
 
-    scratch = next((t for t in all_topics if t.get("name") == "Scratch" and t.get("is_system")), None)
-    if scratch:
-        cfg["scratch_topic_id"] = scratch["id"]
+    if len(results) > 1:
+        raise SystemExit(f"[{env}] Multiple Scratch system topics found — this shouldn't happen. Contact dev@obris.ai.")
+    elif results:
+        cfg[env]["scratch_topic_id"] = results[0]["id"]
         config.save(cfg)
-        click.echo(f"Authenticated. Scratch topic: {scratch['id']}")
+        click.echo(f"[{env}] Authenticated. Scratch topic: {results[0]['id']}")
     else:
-        click.echo("Authenticated. No 'Scratch' topic found — create one in the app.")
+        click.echo(f"[{env}] Authenticated. No 'Scratch' topic found — create one in the app.")
+
+
+@cli.command("env")
+@click.argument("name", required=False, type=click.Choice(list(config.ENVIRONMENTS)))
+def env_cmd(name):
+    """Show or set the default environment."""
+    if name:
+        cfg = config.load()
+        cfg["default_env"] = name
+        config.save(cfg)
+        click.echo(f"Default environment set to: {name}")
+    else:
+        click.echo(config.get_active_env())
 
 
 @cli.command("capture")

@@ -35,9 +35,13 @@ uv run obris scratch list
 uv run obris move <knowledge_id> --topic <id>
 ```
 
-## Hotkeys (Alfred)
+## Hotkeys
 
-Create an Alfred workflow with a **Hotkey** trigger connected to a **Run Script** action (language: `/bin/zsh`).
+Bind keyboard shortcuts to capture commands using any automation tool — [Alfred](https://www.alfredapp.com/), [Raycast](https://www.raycast.com/), [Keyboard Maestro](https://www.keyboardmaestro.com/), macOS Shortcuts, etc.
+
+### Example: Alfred
+
+Create a workflow with a **Hotkey** trigger connected to a **Run Script** action (language: `/bin/zsh`).
 
 ### Quick Capture
 

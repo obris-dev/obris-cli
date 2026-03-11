@@ -7,7 +7,9 @@ from obris import __version__, capture, config, notify, topics, uploader
 
 @click.group()
 @click.version_option(__version__, prog_name="obris")
-@click.option("--env", default=None, type=click.Choice(list(config.ENVIRONMENTS)), help="Environment override (default: prod)")
+@click.option(
+    "--env", default=None, type=click.Choice(list(config.ENVIRONMENTS)), help="Environment override (default: prod)"
+)
 def cli(env):
     """Obris CLI — capture and upload to your personal context layer."""
     if env:
@@ -80,8 +82,8 @@ def capture_cmd(cap_name, prompt_name, topic):
 
     try:
         result = uploader.upload_file(topic_id, path, name)
-    except SystemExit as e:
-        notify.send("Obris", f"Upload failed")
+    except SystemExit:
+        notify.send("Obris", "Upload failed")
         raise
 
     notify.send("Obris", f"Uploaded '{result.get('title', name)}'", url=notify.topic_url(topic_id))

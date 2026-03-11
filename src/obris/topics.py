@@ -27,18 +27,14 @@ def list_topics(*, name=None, is_system=None):
 
 
 def list_knowledge(topic_id):
-    resp = requests.get(
-        f"{get_api_base()}/v1/topics/{topic_id}/knowledge", headers=_headers()
-    )
+    resp = requests.get(f"{get_api_base()}/v1/topics/{topic_id}/knowledge", headers=_headers())
     if not resp.ok:
         raise SystemExit(f"Failed to list knowledge ({resp.status_code}): {resp.text}")
     return _unwrap(resp.json())
 
 
 def delete_knowledge(knowledge_id):
-    resp = requests.delete(
-        f"{get_api_base()}/v1/knowledge/detail/{knowledge_id}", headers=_headers()
-    )
+    resp = requests.delete(f"{get_api_base()}/v1/knowledge/detail/{knowledge_id}", headers=_headers())
     if not resp.ok:
         raise SystemExit(f"Delete failed ({resp.status_code}): {resp.text}")
 

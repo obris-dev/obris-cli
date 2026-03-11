@@ -1,0 +1,54 @@
+import requests
+
+from obris.config import get_api_base, get_api_key
+
+
+def _headers():
+    return {"X-API-Key": get_api_key()}
+
+
+def _unwrap(data):
+    """Handle paginated ({"results": [...]}) or plain list responses."""
+    if isinstance(data, dict) and "results" in data:
+        return data["results"]
+    return data
+
+
+def list_topics(*, name=None, is_system=None):
+    params = {}
+    if name is not None:
+        params["name"] = name
+    if is_system is not None:
+        params["is_system"] = str(is_system).lower()
+    resp = requests.get(f"{get_api_base()}/v1/topics", headers=_headers(), params=params)
+    if not resp.ok:
+        raise SystemExit(f"Failed to list topics ({resp.status_code}): {resp.text}")
+    return _unwrap(resp.json())
+
+
+def list_knowledge(topic_id):
+    resp = requests.get(
+        f"{get_api_base()}/v1/topics/{topic_id}/knowledge", headers=_headers()
+    )
+    if not resp.ok:
+        raise SystemExit(f"Failed to list knowledge ({resp.status_code}): {resp.text}")
+    return _unwrap(resp.json())
+
+
+def delete_knowledge(knowledge_id):
+    resp = requests.delete(
+        f"{get_api_base()}/v1/knowledge/detail/{knowledge_id}", headers=_headers()
+    )
+    if not resp.ok:
+        raise SystemExit(f"Delete failed ({resp.status_code}): {resp.text}")
+
+
+def move_knowledge(knowledge_id, topic_id):
+    resp = requests.post(
+        f"{get_api_base()}/v1/knowledge/detail/{knowledge_id}/move",
+        headers=_headers(),
+        json={"topic_id": topic_id},
+    )
+    if not resp.ok:
+        raise SystemExit(f"Move failed ({resp.status_code}): {resp.text}")
+    return resp.json()

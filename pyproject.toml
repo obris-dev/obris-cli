@@ -4,7 +4,7 @@ version = "0.1.1"
 description = "CLI for capturing screenshots and managing knowledge in Obris"
 
 requires-python = ">=3.10"
-license = "AGPL-3.0-only"
+license = "Apache-2.0"
 authors = [{ name = "Obris", email = "dev@obris.ai" }]
 keywords = ["obris", "cli", "screenshot", "knowledge-management", "ai", "second-brain", "capture"]
 classifiers = [

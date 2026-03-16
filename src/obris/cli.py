@@ -7,9 +7,7 @@ from obris import __version__, capture, config, notify, topics, uploader
 
 @click.group()
 @click.version_option(__version__, prog_name="obris")
-@click.option(
-    "--env", default=None, type=click.Choice(list(config.ENVIRONMENTS)), help="Environment override (default: prod)"
-)
+@click.option("--env", default=None, help="Environment override (default: prod)")
 def cli(env):
     """Obris CLI — capture and upload to your personal context layer."""
     if env:
@@ -43,17 +41,65 @@ def auth(key):
         click.echo(f"[{env}] Authenticated. No 'Scratch' topic found — create one in the app.")
 
 
-@cli.command("env")
-@click.argument("name", required=False, type=click.Choice(list(config.ENVIRONMENTS)))
-def env_cmd(name):
-    """Show or set the default environment."""
-    if name:
-        cfg = config.load()
+@cli.group("env")
+def env_group():
+    """Manage environments."""
+
+
+@env_group.command("show")
+def env_show():
+    """Show the active environment."""
+    click.echo(config.get_active_env())
+
+
+@env_group.command("use")
+@click.argument("name")
+def env_use(name):
+    """Set the default environment."""
+    envs = config.get_environments()
+    if name not in envs:
+        raise SystemExit(f"Unknown environment '{name}'. Run: obris env list")
+    cfg = config.load()
+    cfg["default_env"] = name
+    config.save(cfg)
+    click.echo(f"Default environment set to: {name}")
+
+
+@env_group.command("list")
+def env_list():
+    """List all environments."""
+    envs = config.get_environments()
+    active = config.get_active_env()
+    for name, data in envs.items():
+        marker = " *" if name == active else ""
+        click.echo(f"  {name}{marker}  {data['api_base']}")
+
+
+@env_group.command("add")
+@click.argument("name")
+@click.option("--url", required=True, help="Base URL (e.g. https://obris.example.com)")
+def env_add(name, url):
+    """Add a custom environment and authenticate."""
+    config.add_environment(name, api_base=url, app_base=url)
+
+    key = click.prompt("API key", hide_input=True)
+    cfg = config.load()
+    cfg.setdefault(name, {})
+    cfg[name]["api_key"] = key
+
+    if click.confirm(f"Set '{name}' as default environment?", default=True):
         cfg["default_env"] = name
-        config.save(cfg)
-        click.echo(f"Default environment set to: {name}")
-    else:
-        click.echo(config.get_active_env())
+
+    config.save(cfg)
+    click.echo(f"Added environment '{name}' → {url}")
+
+
+@env_group.command("remove")
+@click.argument("name")
+def env_remove(name):
+    """Remove a custom environment."""
+    config.remove_environment(name)
+    click.echo(f"Removed environment '{name}'.")
 
 
 @cli.command("capture")

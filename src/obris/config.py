@@ -4,7 +4,7 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / ".obris"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
-ENVIRONMENTS = {
+BUILTIN_ENVIRONMENTS = {
     "prod": {
         "api_base": "https://api.obris.ai",
         "app_base": "https://app.obris.ai",
@@ -16,6 +16,41 @@ ENVIRONMENTS = {
 }
 
 DEFAULT_ENV = "prod"
+
+
+def get_environments():
+    """Built-in environments + any custom ones from config."""
+    cfg = load()
+    envs = dict(BUILTIN_ENVIRONMENTS)
+    for name, data in cfg.get("environments", {}).items():
+        envs[name] = data
+    return envs
+
+
+def add_environment(name, api_base, app_base=None):
+    """Add or update a custom environment."""
+    cfg = load()
+    cfg.setdefault("environments", {})
+    cfg["environments"][name] = {
+        "api_base": api_base.rstrip("/"),
+        "app_base": (app_base or api_base).rstrip("/"),
+    }
+    save(cfg)
+
+
+def remove_environment(name):
+    """Remove a custom environment."""
+    if name in BUILTIN_ENVIRONMENTS:
+        raise SystemExit(f"Cannot remove built-in environment '{name}'.")
+    cfg = load()
+    envs = cfg.get("environments", {})
+    if name not in envs:
+        raise SystemExit(f"Environment '{name}' not found.")
+    del envs[name]
+    if cfg.get("default_env") == name:
+        cfg["default_env"] = DEFAULT_ENV
+    save(cfg)
+
 
 _active_env = None
 
@@ -56,12 +91,14 @@ def get_api_key():
 
 def get_api_base():
     env = get_active_env()
-    return ENVIRONMENTS.get(env, ENVIRONMENTS[DEFAULT_ENV])["api_base"]
+    envs = get_environments()
+    return envs.get(env, envs[DEFAULT_ENV])["api_base"]
 
 
 def get_app_base():
     env = get_active_env()
-    return ENVIRONMENTS.get(env, ENVIRONMENTS[DEFAULT_ENV])["app_base"]
+    envs = get_environments()
+    return envs.get(env, envs[DEFAULT_ENV])["app_base"]
 
 
 def get_scratch_topic_id():

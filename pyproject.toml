@@ -1,12 +1,12 @@
 [project]
 name = "obris-cli"
-version = "0.1.1"
-description = "CLI for capturing screenshots and managing knowledge in Obris"
+version = "0.2.0"
+description = "Save, organize, and access your knowledge from the command line"
 
 requires-python = ">=3.10"
 license = "Apache-2.0"
 authors = [{ name = "Obris", email = "dev@obris.ai" }]
-keywords = ["obris", "cli", "screenshot", "knowledge-management", "ai", "second-brain", "capture"]
+keywords = ["obris", "cli", "knowledge-management", "ai", "mcp", "selfhosted"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
@@ -14,7 +14,6 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
     "Environment :: Console",

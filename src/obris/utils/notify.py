@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ICON_PATH = str(Path(__file__).parent / "assets" / "icon.png")
+ICON_PATH = str(Path(__file__).parent.parent / "assets" / "icon.png")
 
 _has_notifier = sys.platform == "darwin" and shutil.which("terminal-notifier") is not None
 

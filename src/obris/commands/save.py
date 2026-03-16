@@ -11,8 +11,9 @@ from obris.utils import capture, notify, upload
 @click.argument("filepath", required=False, type=click.Path(exists=True, path_type=Path))
 @click.option("--screenshot", is_flag=True, help="Take a screenshot and upload")
 @click.option("--name", default=None, help="Display name")
+@click.option("--prompt", "prompt_name", is_flag=True, help="Prompt for a name via dialog")
 @click.option("--topic", default=None, help="Topic ID (defaults to Scratch)")
-def save(filepath, screenshot, name, topic):
+def save(filepath, screenshot, name, prompt_name, topic):
     """Save a file or screenshot to a topic. Screenshots require macOS or Linux."""
     topic_id = topic or config.get_scratch_topic_id()
 
@@ -22,6 +23,10 @@ def save(filepath, screenshot, name, topic):
         except SystemExit:
             notify.send("Obris", "Screenshot cancelled")
             raise
+        if prompt_name:
+            name = capture.prompt_name()
+            if not name:
+                raise SystemExit("Name is required.")
         name = name or path.stem
         notify.send_quiet("Obris", "Uploading...")
         try:

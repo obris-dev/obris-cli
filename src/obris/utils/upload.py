@@ -1,7 +1,7 @@
 import mimetypes
 from pathlib import Path
 
-from obris.api import routes
+from obris import routes
 from obris.api.client import post_form
 
 

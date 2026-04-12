@@ -26,18 +26,23 @@ pip install obris-cli
 ## Authenticate
 
 ```bash
-obris auth
+obris auth login
 ```
 
-You'll be prompted for your API key (or pass it directly with `--key`). Get your key from [app.obris.ai/api-keys](https://app.obris.ai/api-keys). Connects to Obris Cloud by default. See [Selfhosted](#selfhosted) for your own instance.
+Opens a browser to log in. The CLI waits, you authorize, done. Works from any machine — the login URL can be opened on any device with a browser. Connects to Obris Cloud by default. See [Selfhosted](#selfhosted) for your own instance.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `obris auth` | Authenticate with an API key |
+| `obris auth login` | Authenticate via browser |
+| `obris auth status` | Show current authentication |
+| `obris auth logout` | Remove stored credentials |
 | `obris save <file>` | Save a file to a topic |
 | `obris save --screenshot` | Take a screenshot and save it |
+| `obris sync [path]` | Sync a directory with an Obris topic |
+| `obris sync add <file>` | Add a local file to a synced topic |
+| `obris sync link <file> -i <id>` | Relink a renamed file |
 | `obris topic list` | List all topics |
 | `obris topic view <id>` | View a topic and its knowledge items |
 | `obris knowledge view <id>` | View a knowledge item |
@@ -51,13 +56,12 @@ You'll be prompted for your API key (or pass it directly with `--key`). Get your
 
 ## Selfhosted
 
-Point the CLI at your own Obris instance. You'll be prompted for an API key:
+Point the CLI at your own Obris instance:
 
 ```bash
 obris env add myserver --url https://obris.example.com
+obris --env myserver auth login
 ```
-
-Generate an API key from your instance at `https://your-domain/api-keys`.
 
 ## JSON output
 
@@ -66,6 +70,7 @@ Every command supports `--json` for machine-readable output:
 ```bash
 obris --json topic list
 obris --json knowledge view <id>
+obris --json auth status
 ```
 
 ## License

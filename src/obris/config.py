@@ -1,5 +1,11 @@
 import json
+import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import requests
+
+from obris import routes
 
 CONFIG_DIR = Path.home() / ".obris"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -9,10 +15,15 @@ ENV_LOCAL = "local"
 
 KEY_API_BASE = "api_base"
 KEY_APP_BASE = "app_base"
-KEY_API_KEY = "api_key"
+KEY_ACCESS_TOKEN = "access_token"
+KEY_REFRESH_TOKEN = "refresh_token"
+KEY_TOKEN_EXPIRES_AT = "token_expires_at"
+KEY_CLIENT_ID = "client_id"
 KEY_DEFAULT_ENV = "default_env"
 KEY_ENVIRONMENTS = "environments"
 KEY_SCRATCH_TOPIC = "scratch_topic_id"
+
+REFRESH_BUFFER = timedelta(minutes=5)
 
 BUILTIN_ENVIRONMENTS = {
     ENV_CLOUD: {
@@ -84,23 +95,119 @@ def load():
 
 def save(cfg):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2) + "\n")
+    CONFIG_DIR.chmod(0o700)
+    data = json.dumps(cfg, indent=2) + "\n"
+    fd = os.open(CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(data)
+    CONFIG_FILE.chmod(0o600)
 
 
 def _env_data():
     return load().get(get_active_env(), {})
 
 
-def get_api_key():
-    key = _env_data().get(KEY_API_KEY)
-    env = get_active_env()
-    if not key:
-        raise SystemExit(f"Not authenticated for '{env}'. Run: obris --env {env} auth --key <key>")
-    return key
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
 
 
 def auth_headers():
-    return {"X-API-Key": get_api_key()}
+    """Return auth headers, refreshing the token if needed."""
+    _refresh_if_needed()
+    token = _env_data().get(KEY_ACCESS_TOKEN)
+    env = get_active_env()
+    if not token:
+        raise SystemExit(f"Not authenticated for '{env}'. Run: obris --env {env} auth login")
+    return {"Authorization": f"Bearer {token}"}
+
+
+def save_tokens(access_token, refresh_token, expires_in, client_id):
+    """Store OAuth tokens in config for the active environment."""
+    env = get_active_env()
+    cfg = load()
+    cfg.setdefault(env, {})
+    cfg[env][KEY_ACCESS_TOKEN] = access_token
+    cfg[env][KEY_REFRESH_TOKEN] = refresh_token
+    cfg[env][KEY_TOKEN_EXPIRES_AT] = (datetime.now(UTC) + timedelta(seconds=expires_in)).isoformat()
+    cfg[env][KEY_CLIENT_ID] = client_id
+    save(cfg)
+
+
+def clear_tokens():
+    """Remove auth tokens from config for the active environment."""
+    env = get_active_env()
+    cfg = load()
+    env_data = cfg.get(env, {})
+    for key in (KEY_ACCESS_TOKEN, KEY_REFRESH_TOKEN, KEY_TOKEN_EXPIRES_AT, KEY_CLIENT_ID, KEY_SCRATCH_TOPIC):
+        env_data.pop(key, None)
+    save(cfg)
+
+
+def _refresh_if_needed():
+    """Refresh the access token if it expires within the buffer window.
+
+    Malformed timestamps are treated as "force refresh" rather than
+    crashing. Network errors on refresh raise SystemExit so the user
+    knows the request can't proceed (vs. silently using an expired token).
+    """
+    data = _env_data()
+    expires_at = data.get(KEY_TOKEN_EXPIRES_AT)
+    if not expires_at:
+        return
+
+    try:
+        expires = datetime.fromisoformat(expires_at)
+    except (TypeError, ValueError):
+        # Malformed — force a refresh attempt
+        expires = datetime.now(UTC)
+
+    if expires - datetime.now(UTC) > REFRESH_BUFFER:
+        return
+
+    refresh_token = data.get(KEY_REFRESH_TOKEN)
+    client_id = data.get(KEY_CLIENT_ID)
+    if not refresh_token or not client_id:
+        raise SystemExit("Access token expired and no refresh token available. Run: obris auth login")
+
+    try:
+        resp = requests.post(
+            f"{get_api_base()}/{routes.oauth_token()}",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            },
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        raise SystemExit(f"Failed to refresh session: {e}") from e
+
+    if not resp.ok:
+        # 4xx means the refresh token is no longer valid (revoked, expired,
+        # or rotated out from under us). Clear stored credentials so
+        # `auth status` stops claiming we're authenticated.
+        if 400 <= resp.status_code < 500:
+            clear_tokens()
+        raise SystemExit("Session expired. Run: obris auth login")
+
+    try:
+        tokens = resp.json()
+        access_token = tokens["access_token"]
+    except (ValueError, KeyError) as e:
+        raise SystemExit(f"Unexpected refresh response: {e}") from e
+
+    save_tokens(
+        access_token=access_token,
+        refresh_token=tokens.get("refresh_token", refresh_token),
+        expires_in=tokens.get("expires_in", 3600),
+        client_id=client_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Environment helpers
+# ---------------------------------------------------------------------------
 
 
 def get_api_base():
@@ -119,5 +226,5 @@ def get_scratch_topic_id():
     tid = _env_data().get(KEY_SCRATCH_TOPIC)
     env = get_active_env()
     if not tid:
-        raise SystemExit(f"No scratch topic configured for '{env}'. Run: obris --env {env} auth --key <key>")
+        raise SystemExit(f"No scratch topic configured for '{env}'. Run: obris --env {env} auth login")
     return tid

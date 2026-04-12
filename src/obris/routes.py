@@ -31,3 +31,15 @@ def knowledge_move(item_id):
 
 def knowledge_replace_file(item_id):
     return f"v1/knowledge/detail/{item_id}/replace-file"
+
+
+def oauth_token():
+    return "oauth/token/"
+
+
+def device_sessions():
+    return "v1/auth/device-sessions"
+
+
+def device_session(session_id):
+    return f"v1/auth/device-sessions/{session_id}"

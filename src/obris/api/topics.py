@@ -1,4 +1,4 @@
-from obris.api import routes
+from obris import routes
 from obris.api.client import get, post
 
 

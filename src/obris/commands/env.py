@@ -57,21 +57,18 @@ def env_use(name):
 @click.argument("name")
 @click.option("--url", required=True, help="Base URL (e.g. https://obris.example.com)")
 def env_add(name, url):
-    """Add a custom environment and authenticate."""
+    """Add a custom environment."""
     config.add_environment(name, api_base=url, app_base=url)
 
-    key = click.prompt("API key", hide_input=True)
     cfg = config.load()
-    cfg.setdefault(name, {})
-    cfg[name][config.KEY_API_KEY] = key
-
     if click.confirm(f"Set '{name}' as default environment?", default=True):
         cfg[config.KEY_DEFAULT_ENV] = name
+        config.save(cfg)
 
-    config.save(cfg)
     if is_json():
         return as_json({"env": name, config.KEY_API_BASE: url})
     click.echo(f"Added environment '{name}' -> {url}")
+    click.echo(f"Run 'obris --env {name} auth login' to authenticate.")
 
 
 @env_group.command("remove")

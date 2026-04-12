@@ -24,6 +24,7 @@ KEY_CLIENT_ID = "client_id"
 KEY_DEFAULT_ENV = "default_env"
 KEY_ENVIRONMENTS = "environments"
 KEY_SCRATCH_TOPIC = "scratch_topic_id"
+KEY_PENDING_SESSION_ID = "pending_session_id"
 
 REFRESH_BUFFER = timedelta(minutes=5)
 
@@ -143,6 +144,30 @@ def clear_tokens():
     env_data = cfg.get(env, {})
     for key in (KEY_ACCESS_TOKEN, KEY_REFRESH_TOKEN, KEY_TOKEN_EXPIRES_AT, KEY_CLIENT_ID, KEY_SCRATCH_TOPIC):
         env_data.pop(key, None)
+    save(cfg)
+
+
+def save_pending_session(session_id):
+    """Remember a session_id started by `auth login --no-wait` so a later
+    `auth status` call knows which session to finalize."""
+    env = get_active_env()
+    cfg = load()
+    cfg.setdefault(env, {})
+    cfg[env][KEY_PENDING_SESSION_ID] = session_id
+    save(cfg)
+
+
+def get_pending_session():
+    """Return the pending session_id for the active environment, or None."""
+    return _env_data().get(KEY_PENDING_SESSION_ID)
+
+
+def clear_pending_session():
+    """Drop any pending session_id for the active environment."""
+    env = get_active_env()
+    cfg = load()
+    env_data = cfg.get(env, {})
+    env_data.pop(KEY_PENDING_SESSION_ID, None)
     save(cfg)
 
 

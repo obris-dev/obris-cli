@@ -1,21 +1,11 @@
 import contextlib
-import time
 import webbrowser
 
 import click
-import requests
 
-from obris import config, routes
-from obris.api.client import ApiError
-from obris.api.topics import list_topics
+from obris import config
+from obris.auth.session import check_session, finalize_login, poll_for_completion, start_session
 from obris.output import as_json, is_json
-
-POLL_INTERVAL = 2
-# Server session lives 15 minutes; a session completed near the edge stays
-# readable for another COMPLETED_TTL (60s). Give the CLI a buffer past the
-# session TTL so we don't time out in the same second the user authorizes.
-POLL_TIMEOUT = 960
-POLL_MAX_BACKOFF = 30
 
 
 @click.group("auth")
@@ -24,24 +14,28 @@ def auth():
 
 
 @auth.command("login")
-def auth_login():
+@click.option(
+    "--no-wait",
+    is_flag=True,
+    help="Print the login URL and exit without polling. Finish with `obris auth complete`.",
+)
+def auth_login(no_wait):
     """Authenticate via browser (recommended).
 
-    Opens a browser to log in. Works from any environment —
-    copy the link if the browser doesn't open automatically.
+    Opens a browser to log in. Works from any environment — copy the
+    link if the browser doesn't open automatically.
+
+    By default, the CLI polls in the foreground and exits once login is
+    complete. Pass `--no-wait` to print the URL and exit immediately;
+    when you (or your user) have authorized in the browser, run
+    `obris auth complete` to finalize. This mode is required for LLMs
+    and scripted contexts, where blocking the caller would prevent the
+    URL from being relayed to the user.
     """
     api_base = config.get_api_base()
     app_base = config.get_app_base()
 
-    try:
-        resp = requests.post(f"{api_base}/{routes.device_sessions()}", timeout=10)
-        resp.raise_for_status()
-        payload = resp.json()
-        session_id = payload["session_id"]
-    except requests.RequestException as e:
-        raise SystemExit(f"Failed to start login session: {e}") from e
-    except (ValueError, KeyError) as e:
-        raise SystemExit(f"Unexpected response from login session endpoint: {e}") from e
+    session_id = start_session(api_base)
     url = f"{app_base}/auth/device/{session_id}"
 
     if not is_json():
@@ -51,56 +45,51 @@ def auth_login():
     with contextlib.suppress(webbrowser.Error):
         webbrowser.open(url)
 
+    env = config.get_active_env()
+
+    if no_wait:
+        config.save_pending_session(session_id)
+        if is_json():
+            as_json({"env": env, "session_id": session_id, "url": url, "status": "pending"})
+            return
+        click.echo(f"[{env}] After authorizing, run: obris auth complete")
+        return
+
     if not is_json():
         click.echo("Waiting for authentication...")
 
     try:
-        session = _poll_for_completion(api_base, session_id)
+        session = poll_for_completion(api_base, session_id)
     except KeyboardInterrupt:
         click.echo("\nLogin cancelled.", err=True)
         raise SystemExit(130) from None
 
-    email = session.get("email")
-    config.save_tokens(
-        access_token=session["access_token"],
-        refresh_token=session["refresh_token"],
-        expires_in=session.get("expires_in", 3600),
-        client_id=session.get("client_id", ""),
-    )
-
-    scratch_id = _detect_scratch()
-
-    if is_json():
-        as_json(
-            {
-                "env": config.get_active_env(),
-                "email": email,
-                "scratch_topic_id": scratch_id,
-            }
-        )
-        return
-
-    if email:
-        click.echo(f"Logged in as {email}")
-    env = config.get_active_env()
-    if scratch_id:
-        click.echo(f"[{env}] Scratch topic: {scratch_id}")
-    else:
-        click.echo(f"[{env}] No 'Scratch' topic found.")
+    finalize_login(session)
 
 
 @auth.command("status")
 def auth_status():
-    """Show current authentication status."""
+    """Show current authentication status (read-only).
+
+    Reports whether an access token is stored for the active env and,
+    if so, when it expires. If a login was started with `--no-wait` and
+    hasn't been finalized yet, reports that the session is pending.
+    This command never mutates stored state; run `obris auth complete`
+    to finalize a pending session.
+    """
     env = config.get_active_env()
     data = config._env_data()
     token = data.get(config.KEY_ACCESS_TOKEN)
+    pending = config.get_pending_session()
 
     if not token:
         if is_json():
-            as_json({"env": env, "authenticated": False})
+            as_json({"env": env, "authenticated": False, "pending": bool(pending)})
             return
-        click.echo(f"[{env}] Not authenticated.")
+        if pending:
+            click.echo(f"[{env}] Login pending. Finish with: obris auth complete")
+        else:
+            click.echo(f"[{env}] Not authenticated.")
         return
 
     expires_at = data.get(config.KEY_TOKEN_EXPIRES_AT, "")
@@ -124,6 +113,45 @@ def auth_status():
         click.echo(f"[{env}] Scratch topic: {scratch}")
 
 
+@auth.command("complete")
+def auth_complete():
+    """Finalize a pending `auth login --no-wait` session.
+
+    Checks the pending session once and, if the user has authorized in
+    the browser, saves the tokens and clears the pending state. Exits
+    non-zero if no pending session exists or the session has expired.
+    """
+    env = config.get_active_env()
+    pending = config.get_pending_session()
+
+    if not pending:
+        if is_json():
+            as_json({"env": env, "completed": False, "reason": "no_pending_session"})
+            raise SystemExit(1)
+        raise SystemExit(f"[{env}] No pending login session. Start one with: obris auth login --no-wait")
+
+    api_base = config.get_api_base()
+    session = check_session(api_base, pending)
+
+    if session is None:
+        config.clear_pending_session()
+        if is_json():
+            as_json({"env": env, "completed": False, "reason": "session_expired"})
+            raise SystemExit(1)
+        raise SystemExit(f"[{env}] Pending login session expired. Run: obris auth login --no-wait")
+
+    if session.get("status") != "completed":
+        app_base = config.get_app_base()
+        url = f"{app_base}/auth/device/{pending}"
+        if is_json():
+            as_json({"env": env, "completed": False, "reason": "still_pending", "url": url})
+            raise SystemExit(1)
+        raise SystemExit(f"[{env}] Login still pending. Open: {url}")
+
+    finalize_login(session)
+    config.clear_pending_session()
+
+
 @auth.command("logout")
 def auth_logout():
     """Remove stored credentials."""
@@ -138,93 +166,8 @@ def auth_logout():
         return
 
     config.clear_tokens()
+    config.clear_pending_session()
     if is_json():
         as_json({"env": env, "logged_out": True})
         return
     click.echo(f"[{env}] Logged out.")
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _poll_for_completion(api_base, session_id):
-    """Poll the session endpoint until completed or expired.
-
-    Backs off on server errors (5xx, 429) with exponential delay,
-    logging each retry. Returns the completed session data.
-    """
-    deadline = time.time() + POLL_TIMEOUT
-    poll_url = f"{api_base}/{routes.device_session(session_id)}"
-    backoff = POLL_INTERVAL
-    last_server_error = None
-
-    while True:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            break
-
-        try:
-            resp = requests.get(poll_url, timeout=10)
-        except requests.RequestException as e:
-            last_server_error = str(e)
-            click.echo(f"  Network error polling session: {e}, retrying", err=True)
-            _sleep_within(backoff, deadline)
-            backoff = min(backoff * 2, POLL_MAX_BACKOFF)
-            continue
-
-        if resp.status_code == 404:
-            raise SystemExit("Login session expired. Run 'obris auth login' to try again.")
-
-        if resp.status_code >= 500 or resp.status_code == 429:
-            last_server_error = f"HTTP {resp.status_code}"
-            click.echo(f"  Server returned {resp.status_code}, retrying", err=True)
-            _sleep_within(backoff, deadline)
-            backoff = min(backoff * 2, POLL_MAX_BACKOFF)
-            continue
-
-        if not resp.ok:
-            raise SystemExit(f"Login failed ({resp.status_code}): {resp.text}")
-
-        data = resp.json()
-        if data.get("status") == "completed":
-            if not data.get("access_token"):
-                raise SystemExit("Session completed but no token received.")
-            return data
-
-        # Still pending — reset backoff and wait normally
-        last_server_error = None
-        backoff = POLL_INTERVAL
-        _sleep_within(POLL_INTERVAL, deadline)
-
-    if last_server_error:
-        raise SystemExit(f"Login polling failed after retries: {last_server_error}")
-    raise SystemExit("Login timed out. Run 'obris auth login' to try again.")
-
-
-def _sleep_within(seconds, deadline):
-    """Sleep for up to `seconds`, clamped so we never sleep past the deadline."""
-    remaining = deadline - time.time()
-    if remaining <= 0:
-        return
-    time.sleep(min(seconds, remaining))
-
-
-def _detect_scratch():
-    """Detect and store the Scratch topic ID. Returns the ID or None."""
-    env = config.get_active_env()
-
-    try:
-        results = list_topics(name="Scratch", is_system=True)
-    except ApiError as e:
-        click.echo(f"[{env}] Warning: could not detect Scratch topic: {e}", err=True)
-        return None
-
-    scratch_id = results[0]["id"] if results else None
-    if scratch_id:
-        cfg = config.load()
-        cfg.setdefault(env, {})
-        cfg[env][config.KEY_SCRATCH_TOPIC] = scratch_id
-        config.save(cfg)
-    return scratch_id

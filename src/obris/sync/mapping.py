@@ -1,8 +1,10 @@
 """Filename computation, hashing, and file utilities for sync."""
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
+
+UTC = timezone.utc
 
 CONFLICT_MARKER = "(conflict "
 HASH_CHUNK_SIZE = 64 * 1024

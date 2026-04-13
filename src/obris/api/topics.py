@@ -4,16 +4,40 @@ from obris.sync.models import RemoteTopic
 
 
 def list_topics(*, name=None, is_system=None, parent_id=None, roots_only=False):
-    params = {}
+    """List topics, walking all pages so callers get the full set.
+
+    The server paginates at ``page_size=10`` by default; returning a
+    single page quietly hid older topics (anything not on page 1). We
+    request ``page_size=100`` per page and iterate ``next`` until it
+    runs out.
+    """
+    base_params = {}
     if name is not None:
-        params["name"] = name
+        base_params["name"] = name
     if is_system is not None:
-        params["is_system"] = str(is_system).lower()
+        base_params["is_system"] = str(is_system).lower()
     if parent_id is not None:
-        params["parent_id"] = parent_id
+        base_params["parent_id"] = parent_id
     if roots_only:
-        params["roots_only"] = "true"
-    return get(routes.topics(), params=params, action="List topics", unwrap=True)
+        base_params["roots_only"] = "true"
+
+    items = []
+    page = 1
+    while True:
+        body = get(
+            routes.topics(),
+            params={**base_params, "page": page, "page_size": 100},
+            action="List topics",
+        )
+        if isinstance(body, dict) and "results" in body:
+            items.extend(body["results"])
+            if not body.get("next"):
+                break
+        else:
+            items.extend(body if isinstance(body, list) else [])
+            break
+        page += 1
+    return items
 
 
 def get_topic(topic_id) -> RemoteTopic:
@@ -31,27 +55,6 @@ def fetch_subtree(topic_id) -> list[RemoteTopic]:
     """Return ``RemoteTopic`` entries for the topic and all descendants."""
     raw = get(routes.topic_subtree(topic_id), action="Fetch topic subtree", unwrap=True)
     return [RemoteTopic.from_api(r) for r in raw]
-
-
-def list_all_topics(**kwargs):
-    """Fetch all topics, handling pagination."""
-    items = []
-    page = 1
-    while True:
-        data = get(
-            routes.topics(),
-            params={**kwargs, "page": page, "page_size": 100},
-            action="List topics",
-        )
-        if isinstance(data, dict) and "results" in data:
-            items.extend(data["results"])
-            if not data.get("next"):
-                break
-        else:
-            items.extend(data if isinstance(data, list) else [])
-            break
-        page += 1
-    return items
 
 
 def list_knowledge(topic_id):

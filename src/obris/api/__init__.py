@@ -7,7 +7,7 @@ from obris.api.knowledge import (
     knowledge_replace_file,
     knowledge_update,
 )
-from obris.api.topics import create_topic, get_topic, list_all_knowledge, list_all_topics, list_knowledge, list_topics
+from obris.api.topics import create_topic, get_topic, list_all_knowledge, list_knowledge, list_topics
 
 __all__ = [
     "ApiError",
@@ -22,7 +22,6 @@ __all__ = [
     "knowledge_replace_file",
     "knowledge_update",
     "list_all_knowledge",
-    "list_all_topics",
     "list_knowledge",
     "list_topics",
     "patch",

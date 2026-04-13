@@ -2,11 +2,19 @@ from pathlib import Path
 
 import click
 
-from obris.api.topics import create_topic, fetch_subtree, get_topic
+from obris.api.topics import get_topic
 from obris.output import as_json, is_json
 from obris.sync.commands import add_file, link_file
-from obris.sync.engine import run_sync
+from obris.sync.daemon import (
+    DaemonError,
+    run_watcher_from_config,
+    spawn_background_watcher,
+)
+from obris.sync.daemon_control import daemon_info, read_daemon_log_tail, stop_daemon
+from obris.sync.resolver import SubtopicTargetError, assert_all_roots, find_root_id, resolve_targets
+from obris.sync.runner import run_sync_pass
 from obris.sync.state import SyncState
+from obris.sync.watch import run_watch_loop
 
 
 @click.group("sync", invoke_without_command=True)
@@ -22,8 +30,28 @@ from obris.sync.state import SyncState
 )
 @click.option("--dry-run", is_flag=True, help="Preview changes without modifying anything")
 @click.option("-y", "--yes", is_flag=True, help="Auto-confirm prompts")
+@click.option(
+    "--watch",
+    "watch",
+    is_flag=True,
+    help="Keep syncing on an interval until interrupted (Ctrl-C).",
+)
+@click.option(
+    "--interval",
+    "interval",
+    type=click.IntRange(min=5),
+    default=30,
+    show_default=True,
+    help="Seconds between watch iterations. Minimum 5.",
+)
+@click.option(
+    "--background",
+    "background",
+    is_flag=True,
+    help="With --watch, detach and run as a background daemon. Manage with 'obris sync status' and 'obris sync stop'.",
+)
 @click.pass_context
-def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, yes):
+def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, yes, watch, interval, background):
     """Sync a local directory with an Obris root topic and its subtopics.
 
     On first sync, provide --topic <id> to link to an existing root topic,
@@ -44,76 +72,80 @@ def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, yes):
     if ctx.invoked_subcommand is not None:
         return
 
+    if background and not watch:
+        raise click.UsageError("--background requires --watch.")
+    if dry_run and watch:
+        raise click.UsageError("--dry-run cannot be combined with --watch.")
+
     sync_dir = Path(path).resolve()
     patterns = list(include_patterns) if include_patterns else None
 
-    targets = _resolve_targets(sync_dir, topic_id, yes)
+    targets = resolve_targets(sync_dir, topic_id, yes)
+    # Preflight subtopic check for all three paths (single-pass,
+    # foreground watch, background watch). Without this, the foreground
+    # watch would log the same "subtopic" error every iteration forever,
+    # and the background watcher would silently start but never progress.
+    assert_all_roots(targets, sync_dir)
 
-    total_pulled, total_pushed, total_conflicts, total_errors = 0, 0, 0, 0
-
-    if dry_run:
-        click.echo("  (dry run — no changes will be made)")
-
-    for state, tid, topic_name in targets:
-        # Root-only enforcement: fetch the topic and check parent_id.
-        topic = get_topic(tid)
-        if topic.parent_id:
-            root = _find_root(tid)
-            raise SystemExit(
-                f'"{topic_name}" is a subtopic of "{root.name}". '
-                f"Sync from the root topic instead:\n"
-                f"  obris sync --topic {root.id} --path {sync_dir}"
-            )
-
-        click.echo(f'Syncing "{topic_name}" \u2194 {sync_dir}/')
-
+    if background:
         try:
-            subtree = fetch_subtree(tid)
-        except Exception as e:
-            click.echo(f"  Error fetching subtree: {type(e).__name__}: {e}", err=True)
-            total_errors += 1
-            continue
+            info = spawn_background_watcher(
+                sync_dir=sync_dir,
+                targets=[(tid, name) for _state, tid, name in targets],
+                item_ids=list(item_ids) if item_ids else None,
+                include_patterns=patterns,
+                interval=interval,
+            )
+        except DaemonError as e:
+            raise SystemExit(str(e)) from e
+        click.echo(f"Watching {sync_dir}/ every {interval}s in background (pid {info['pid']}).")
+        click.echo(f"  Log:  {info['log']}")
+        click.echo(f"  Stop: obris sync stop -p {sync_dir}")
+        return
 
-        pulled, pushed, conflicts, errors = run_sync(
-            tid,
-            str(sync_dir),
-            state=state,
-            subtree=subtree,
-            item_ids=item_ids or None,
-            include_patterns=patterns,
-            dry_run=dry_run,
-        )
-        total_pulled += pulled
-        total_pushed += pushed
-        total_conflicts += conflicts
-        total_errors += errors
+    if watch:
+        click.echo(f"Watching {sync_dir}/ every {interval}s. Press Ctrl-C to stop.")
+        try:
+            run_watch_loop(
+                run_once=lambda: run_sync_pass(
+                    sync_dir,
+                    targets,
+                    item_ids,
+                    patterns,
+                    dry_run=False,
+                    quiet_if_clean=True,
+                ),
+                interval=interval,
+            )
+        except KeyboardInterrupt:
+            click.echo("\nStopped.")
+        except SubtopicTargetError as e:
+            # Mid-watch reparent: exit cleanly with the same message
+            # format as the preflight, instead of spinning.
+            raise SystemExit(str(e)) from None
+        return
 
-        if not pulled and not pushed and not conflicts and not errors:
-            click.echo("  Everything up to date.")
-        else:
-            parts = []
-            if pushed:
-                parts.append(f"{pushed} pushed")
-            if pulled:
-                parts.append(f"{pulled} pulled")
-            if conflicts:
-                parts.append(f"{conflicts} conflicts")
-            if errors:
-                parts.append(f"{errors} failed")
-            click.echo(f"  Done: {', '.join(parts)}")
+    totals = run_sync_pass(
+        sync_dir,
+        targets,
+        item_ids,
+        patterns,
+        dry_run=dry_run,
+        quiet_if_clean=False,
+    )
 
     if is_json():
         as_json(
             {
                 "path": str(sync_dir),
-                "pulled": total_pulled,
-                "pushed": total_pushed,
-                "conflicts": total_conflicts,
-                "errors": total_errors,
+                "pulled": totals["pulled"],
+                "pushed": totals["pushed"],
+                "conflicts": totals["conflicts"],
+                "errors": totals["errors"],
             }
         )
 
-    if total_errors:
+    if totals["errors"]:
         raise SystemExit(1)
 
 
@@ -144,7 +176,7 @@ def sync_add(file, topic_id):
     if states and topic_id:
         # User passed an explicit topic — figure out which root it belongs to.
         target_topic = get_topic(topic_id)
-        root_id = _find_root_id(topic_id, target_topic)
+        root_id = find_root_id(topic_id, target_topic)
         root_state_match = next(((s, rid) for s, rid in states if rid == root_id), None)
         if root_state_match is None:
             raise SystemExit(f"Topic {topic_id} is under root {root_id}, which is not synced at {sync_dir}/.")
@@ -201,7 +233,7 @@ def sync_link(file, item_id, topic_id):
 
     if topic_id:
         target_topic = get_topic(topic_id)
-        root_id = _find_root_id(topic_id, target_topic)
+        root_id = find_root_id(topic_id, target_topic)
         match = next(((s, rid) for s, rid in states if rid == root_id), None)
         if match is None:
             raise SystemExit(f"Topic {topic_id} is under root {root_id}, which is not synced at {sync_dir}/.")
@@ -221,53 +253,48 @@ def sync_link(file, item_id, topic_id):
     click.echo(f'Linked "{filepath.name}" to item {item_id}')
 
 
-def _resolve_targets(sync_dir, topic_id, yes):
-    """Determine which topic(s) to sync.
-
-    Returns list of (SyncState | None, topic_id, topic_name) tuples.
-    """
-    if topic_id:
-        state = SyncState.load(topic_id, sync_dir)
-        topic = get_topic(topic_id)
-        return [(state, topic_id, topic.name)]
-
-    states = SyncState.find_all_for_path(sync_dir)
-
-    if states:
-        targets = []
-        for state, tid in states:
-            topic = get_topic(tid)
-            targets.append((state, tid, topic.name))
-        return targets
-
-    topic_name = sync_dir.name
-    if not yes:
-        click.confirm(f'Create topic "{topic_name}" and sync to {sync_dir}/?', default=True, abort=True)
-    topic = create_topic(topic_name)
-    click.echo(f'Created topic "{topic_name}"')
-    return [(None, topic.id, topic_name)]
-
-
-def _find_root(topic_id, topic=None):
-    """Walk up parent_id pointers to find the root topic.
-
-    Cycle-safe: visited set + depth cap. Raises SystemExit on cycle.
-    """
-    if topic is None:
-        topic = get_topic(topic_id)
-    visited = {topic_id}
-    depth = 0
-    while topic.parent_id:
-        depth += 1
-        if depth > 64:
-            raise SystemExit(f"Topic ancestor chain exceeds depth 64 starting at {topic_id}")
-        parent_id = topic.parent_id
-        if parent_id in visited:
-            raise SystemExit(f"Topic ancestor cycle detected walking up from {topic_id}")
-        visited.add(parent_id)
-        topic = get_topic(parent_id)
-    return topic
+@sync.command("status")
+@click.option("--path", "-p", default=".", help="Local directory to check (defaults to current directory)")
+@click.option("--log-lines", "log_lines", type=int, default=10, show_default=True, help="Tail of log lines to print.")
+def sync_status(path, log_lines):
+    """Show background watcher status for a synced directory."""
+    sync_dir = Path(path).resolve()
+    info = daemon_info(sync_dir)
+    if info is None:
+        click.echo(f"No background watcher for {sync_dir}/.")
+        return
+    click.echo(f"Watcher for {sync_dir}/")
+    click.echo(f"  PID:      {info['pid']} ({'running' if info['alive'] else 'dead — stale pidfile'})")
+    click.echo(f"  Started:  {info.get('started_at', '?')}")
+    click.echo(f"  Interval: {info.get('interval', '?')}s")
+    topics = info.get("topics") or []
+    if topics:
+        click.echo("  Topics:")
+        for t in topics:
+            click.echo(f"    {t['name']} ({t['id']})")
+    click.echo(f"  Log:      {info['log']}")
+    if log_lines:
+        tail = read_daemon_log_tail(sync_dir, log_lines)
+        if tail:
+            click.echo("  Last log:")
+            for line in tail:
+                click.echo(f"    {line}")
 
 
-def _find_root_id(topic_id, topic=None):
-    return _find_root(topic_id, topic).id
+@sync.command("stop")
+@click.option("--path", "-p", default=".", help="Local directory whose watcher to stop")
+def sync_stop(path):
+    """Stop a background sync watcher."""
+    sync_dir = Path(path).resolve()
+    stopped = stop_daemon(sync_dir)
+    if stopped is None:
+        click.echo(f"No background watcher for {sync_dir}/.")
+        return
+    click.echo(f"Stopped watcher (pid {stopped}) for {sync_dir}/.")
+
+
+@sync.command("_watcher", hidden=True)
+@click.argument("config_path")
+def sync_watcher_entry(config_path):
+    """Internal entry point launched by `--background`. Do not call directly."""
+    run_watcher_from_config(Path(config_path))

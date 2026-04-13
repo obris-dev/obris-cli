@@ -1,12 +1,13 @@
 """Sync state persistence and manipulation.
 
-State is stored under ~/.obris/sync/, one file per topic+path pairing.
-State is keyed by knowledge_id (the remote item's primary key), not
-by filename. This means renames on either side are metadata updates,
-not create+delete cycles.
+State is stored under ~/.obris/sync/, one file per (root topic, local path).
+State is keyed by knowledge_id (the remote item's primary key), not by
+filename. Renames on either side are metadata updates, not create+delete.
 
-Multiple topics can sync to the same directory. Each topic's state
-file is independent — a local file can be tracked by several topics.
+Subtopic support: one state file per *root* topic covers the entire
+subtree. topic_dirs maps topic_id -> relative directory (POSIX-style)
+under local_path. The CLI only syncs root topics (parent_id = NULL);
+child topics are not valid sync targets on their own.
 """
 
 import hashlib
@@ -43,13 +44,15 @@ def _read(path):
 
 
 class SyncState:
-    """Manages the sync state for a single topic+path pairing."""
+    """Manages the sync state for a single (root topic, local path) pairing."""
 
     def __init__(self, topic_id, local_path, data=None):
         self.topic_id = topic_id
         self.local_path = str(Path(local_path).resolve())
         raw = data.get("items", {}) if data else {}
         self._items = {kid: TrackedItem.from_dict(entry) for kid, entry in raw.items()}
+        self._topic_dirs = dict(data.get("topic_dirs", {})) if data else {}
+        self._include_patterns = list(data.get("include_patterns", [])) if data else []
 
     @classmethod
     def load(cls, topic_id, local_path):
@@ -84,10 +87,36 @@ class SyncState:
             "topic_id": self.topic_id,
             "local_path": self.local_path,
             "last_sync": now_iso(),
+            "topic_dirs": self._topic_dirs,
+            "include_patterns": self._include_patterns,
             "items": {kid: item.to_dict() for kid, item in self._items.items()},
         }
         tmp.write_text(json.dumps(data, indent=2) + "\n")
         tmp.rename(path)
+
+    # -- Topic directory map --
+
+    @property
+    def topic_dirs(self) -> dict[str, str]:
+        return self._topic_dirs
+
+    def set_topic_dir(self, topic_id, relative_dir):
+        self._topic_dirs[topic_id] = relative_dir
+
+    def drop_topic_dir(self, topic_id):
+        self._topic_dirs.pop(topic_id, None)
+
+    def get_topic_dir(self, topic_id) -> str | None:
+        return self._topic_dirs.get(topic_id)
+
+    # -- Include patterns --
+
+    @property
+    def include_patterns(self) -> list[str]:
+        return list(self._include_patterns)
+
+    def set_include_patterns(self, patterns: list[str]):
+        self._include_patterns = list(patterns)
 
     # -- Item tracking --
 
@@ -99,12 +128,22 @@ class SyncState:
         """Get the tracked entry for a knowledge_id, or None."""
         return self._items.get(knowledge_id)
 
-    def track(self, knowledge_id, filename, local_hash, last_synced_at, *, pushed_hash=""):
+    def track(
+        self,
+        knowledge_id,
+        filename,
+        local_hash,
+        last_synced_at,
+        *,
+        topic_id="",
+        pushed_hash="",
+    ):
         """Add or update a tracked item."""
         self._items[knowledge_id] = TrackedItem(
             filename=filename,
             local_hash=local_hash,
             last_synced_at=last_synced_at,
+            topic_id=topic_id,
             pushed_hash=pushed_hash,
         )
 

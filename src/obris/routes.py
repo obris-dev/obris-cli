@@ -9,6 +9,10 @@ def topic(topic_id):
     return f"v1/topics/{topic_id}"
 
 
+def topic_subtree(topic_id):
+    return f"v1/topics/{topic_id}/subtree"
+
+
 def topic_knowledge(topic_id):
     return f"v1/topics/{topic_id}/knowledge"
 

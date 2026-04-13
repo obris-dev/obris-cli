@@ -1,5 +1,6 @@
 from obris import routes
 from obris.api.client import get, post
+from obris.sync.models import RemoteTopic
 
 
 def list_topics(*, name=None, is_system=None):
@@ -11,12 +12,21 @@ def list_topics(*, name=None, is_system=None):
     return get(routes.topics(), params=params, action="List topics", unwrap=True)
 
 
-def get_topic(topic_id):
-    return get(routes.topic(topic_id), action="Get topic")
+def get_topic(topic_id) -> RemoteTopic:
+    """Fetch a single topic. Returns a ``RemoteTopic`` DTO so callers
+    do attribute access instead of dict .get() calls — same pattern as
+    ``RemoteItem`` on the knowledge side."""
+    return RemoteTopic.from_api(get(routes.topic(topic_id), action="Get topic"))
 
 
-def create_topic(name):
-    return post(routes.topics(), json={"name": name}, action="Create topic")
+def create_topic(name) -> RemoteTopic:
+    return RemoteTopic.from_api(post(routes.topics(), json={"name": name}, action="Create topic"))
+
+
+def fetch_subtree(topic_id) -> list[RemoteTopic]:
+    """Return ``RemoteTopic`` entries for the topic and all descendants."""
+    raw = get(routes.topic_subtree(topic_id), action="Fetch topic subtree", unwrap=True)
+    return [RemoteTopic.from_api(r) for r in raw]
 
 
 def list_all_topics(**kwargs):
@@ -49,13 +59,21 @@ def list_all_knowledge(topic_id):
     return list(iter_knowledge(topic_id))
 
 
-def iter_knowledge(topic_id):
-    """Yield knowledge items for a topic, page by page."""
+def iter_knowledge(topic_id, *, recursive=False):
+    """Yield knowledge items for a topic, page by page.
+
+    When ``recursive`` is True, the server returns items from the topic
+    and all its descendants. Items carry ``topic_id`` so callers can
+    place them under the right subtopic.
+    """
     page = 1
+    base_params = {"page_size": 100}
+    if recursive:
+        base_params["recursive"] = "true"
     while True:
         data = get(
             routes.topic_knowledge(topic_id),
-            params={"page": page, "page_size": 100},
+            params={**base_params, "page": page},
             action="List knowledge",
         )
         if isinstance(data, dict) and "results" in data:

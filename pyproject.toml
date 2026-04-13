@@ -1,6 +1,6 @@
 [project]
 name = "obris-cli"
-version = "0.5.0"
+version = "0.5.1"
 description = "Save, organize, and access your knowledge from the command line"
 
 requires-python = ">=3.10"

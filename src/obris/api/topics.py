@@ -3,12 +3,16 @@ from obris.api.client import get, post
 from obris.sync.models import RemoteTopic
 
 
-def list_topics(*, name=None, is_system=None):
+def list_topics(*, name=None, is_system=None, parent_id=None, roots_only=False):
     params = {}
     if name is not None:
         params["name"] = name
     if is_system is not None:
         params["is_system"] = str(is_system).lower()
+    if parent_id is not None:
+        params["parent_id"] = parent_id
+    if roots_only:
+        params["roots_only"] = "true"
     return get(routes.topics(), params=params, action="List topics", unwrap=True)
 
 

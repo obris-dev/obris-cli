@@ -143,9 +143,15 @@ def run_sync(
         if filter_item_ids and item.id not in filter_item_ids:
             continue
 
+        # On a dry-run pass, ``reconcile_topic_dirs`` deliberately doesn't
+        # call ``state.set_topic_dir`` (no side effects on the local state
+        # file), so ``state.get_topic_dir`` returns None for any subtopic
+        # that the live run would create. Fall back to the desired map
+        # the manifest already gave us, otherwise dry-run output prints
+        # bare basenames with no parent directory context.
         item_rel = state.get_topic_dir(item.topic_id) if item.topic_id else ""
         if item_rel is None:
-            item_rel = ""
+            item_rel = desired_topic_dirs.get(item.topic_id, "") if item.topic_id else ""
 
         if state.is_tracked(item.id):
             entry = state.get(item.id)

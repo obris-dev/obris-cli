@@ -7,8 +7,9 @@ from obris.commands.sync_config import register as _register_config_subcommands
 from obris.commands.sync_conflicts import register as _register_conflicts_subgroup
 from obris.output import as_json, is_json
 from obris.sync.commands import add_file, link_file
+from obris.sync.preview import preview_first_sync
 from obris.sync.resolver import assert_all_roots, find_root_id, resolve_targets
-from obris.sync.runner import preview_first_sync, run_sync_pass
+from obris.sync.runner import run_sync_pass
 from obris.sync.state import SyncState
 
 
@@ -102,6 +103,7 @@ def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, add_all_files
                 "symlinks": totals["symlinks"],
                 "conflicts_pending": totals["conflicts_pending"],
                 "missing_local": totals["missing_local"],
+                "skipped_by_include": totals.get("skipped_by_include", []),
             }
         )
 

@@ -8,6 +8,7 @@ import click
 
 from obris.api.topics import get_topic
 from obris.sync.engine import run_sync
+from obris.sync.engine.filters import any_match
 from obris.sync.resolver import find_root
 from obris.sync.scanner import add_all, find_untracked
 from obris.sync.state import SyncState
@@ -47,6 +48,7 @@ def run_sync_pass(
         "symlinks": [],
         "conflicts_pending": [],
         "missing_local": [],
+        "skipped_by_include": [],
     }
 
     if dry_run:
@@ -98,9 +100,23 @@ def run_sync_pass(
     if not fresh_states:
         return totals
     scan = find_untracked(sync_dir, fresh_states)
+
+    # When --add-all is combined with --include, the bulk-add should
+    # honor the same scope the rest of the sync uses — pull, push,
+    # tracked-item dispatch, remote-deleted detection all already
+    # respect ``patterns``. ``find_untracked`` doesn't see the patterns,
+    # so we partition its result here. Files outside the include scope
+    # are surfaced separately so the user knows they were skipped on
+    # purpose, not silently dropped.
+    out_of_include_scope: list[str] = []
+    if add_all_files and patterns and scan.untracked:
+        in_scope, out_of_include_scope = _partition_by_include(scan.untracked, patterns)
+        scan.untracked = in_scope
+
     totals["untracked"] = list(scan.untracked)
     totals["excluded_count"] = len(scan.excluded)
     totals["symlinks"] = [{"path": p, "target": t} for p, t in scan.symlinks]
+    totals["skipped_by_include"] = list(out_of_include_scope)
     for state, _tid in fresh_states:
         for kid, meta in state.conflicts.items():
             entry = state.get(kid)
@@ -116,6 +132,11 @@ def run_sync_pass(
                 }
             )
     _emit_scan(scan, sync_dir, add_all_files, dry_run=dry_run, verbose=verbose)
+
+    if out_of_include_scope:
+        cap = None if verbose else _LIST_PREVIEW
+        click.echo(f"\nSkipped {len(out_of_include_scope)} untracked file(s) outside --include scope:")
+        _print_capped(out_of_include_scope, cap)
 
     if add_all_files and scan.untracked and not dry_run:
         # All targets share the same sync_dir; bulk-add against the
@@ -176,6 +197,29 @@ def _emit_scan(scan, sync_dir, add_all_files, *, dry_run=False, verbose=False):
         _print_capped(scan.excluded, cap)
 
 
+def _partition_by_include(rels: list[str], patterns: list[str]) -> tuple[list[str], list[str]]:
+    """Split untracked rel-paths by whether their parent dir is in --include scope.
+
+    A file's parent directory becomes (or maps to) a subtopic name path
+    when ``--add-all`` runs; we test the same name path against the
+    patterns the engine already evaluates against the remote subtree.
+    Root-level files (parent is ``"."``) test against an empty segment
+    list — patterns like ``Projects/**`` won't match, which mirrors
+    the engine's own behaviour where the root topic isn't in
+    ``matched_ids`` when patterns are set.
+    """
+    in_scope: list[str] = []
+    out_of_scope: list[str] = []
+    for rel in rels:
+        rel_dir = str(PurePosixPath(rel).parent)
+        segments = [] if rel_dir == "." else [s for s in rel_dir.split("/") if s]
+        if any_match(segments, patterns):
+            in_scope.append(rel)
+        else:
+            out_of_scope.append(rel)
+    return in_scope, out_of_scope
+
+
 def _print_capped(items, cap):
     """Print at most ``cap`` items, then a "... N more" line. None = no cap."""
     shown = items if cap is None else items[:cap]
@@ -183,84 +227,3 @@ def _print_capped(items, cap):
         click.echo(f"  {line}")
     if cap is not None and len(items) > cap:
         click.echo(f"  ... ({len(items) - cap} more)")
-
-
-def preview_first_sync(sync_dir: Path, *, add_all_files: bool, allow_subtopics: bool) -> dict:
-    """Local-only dry-run preview for a fresh directory.
-
-    Called when ``resolve_targets`` returned ``[]`` (dry-run + no
-    state + no ``--topic``). Side-effect free: walks the dir using a
-    synthetic empty ``SyncState`` so ``find_untracked`` reuses the
-    same exclusion + symlink logic the live path uses, then prints
-    what create_topic / _ensure_subtopic_path / add_all would do.
-
-    Ignored files are surfaced unconditionally — the user explicitly
-    asked for the full picture before committing to a real sync.
-
-    Returns the same totals dict shape as ``run_sync_pass`` so the
-    JSON output stays consistent.
-    """
-    sync_dir = Path(sync_dir).resolve()
-    topic_name = sync_dir.name
-    click.echo("  (dry run — no changes will be made)")
-    click.echo(f'  Would create topic "{topic_name}" at {sync_dir}/')
-
-    synthetic = SyncState("__preview__", str(sync_dir))
-    scan = find_untracked(sync_dir, [(synthetic, "__preview__")])
-
-    # Subtopic projection: every directory segment under sync_dir that
-    # contains an untracked file would become a subtopic level. Mirrors
-    # the cache walk in ``scanner._ensure_subtopic_path``.
-    subdirs: set[str] = set()
-    skipped_subdir = 0
-    if allow_subtopics:
-        for rel in scan.untracked:
-            rel_dir = str(PurePosixPath(rel).parent)
-            if rel_dir == ".":
-                continue
-            walked = ""
-            for seg in rel_dir.split("/"):
-                walked = f"{walked}/{seg}" if walked else seg
-                subdirs.add(walked)
-    else:
-        skipped_subdir = sum(1 for rel in scan.untracked if "/" in rel)
-
-    if subdirs:
-        click.echo(f"\nWould create {len(subdirs)} subtopic(s):")
-        for sd in sorted(subdirs):
-            click.echo(f"  {sd}/")
-
-    if scan.untracked:
-        if not add_all_files:
-            click.echo(f"\n{len(scan.untracked)} untracked file(s) (would NOT add — re-run with --add-all):")
-            _print_capped(scan.untracked, None)
-        elif not allow_subtopics:
-            top_level = [r for r in scan.untracked if "/" not in r]
-            click.echo(f"\nWould add {len(top_level)} top-level file(s):")
-            _print_capped(top_level, None)
-            if skipped_subdir:
-                click.echo(f"\nWould skip {skipped_subdir} file(s) in subdirs (--no-subtopics):")
-                _print_capped([r for r in scan.untracked if "/" in r], None)
-        else:
-            click.echo(f"\nWould add {len(scan.untracked)} file(s):")
-            _print_capped(scan.untracked, None)
-
-    if scan.excluded:
-        click.echo(f"\n{len(scan.excluded)} file(s) matched ignore rules:")
-        _print_capped(scan.excluded, None)
-
-    if scan.symlinks:
-        click.echo(f"\n{len(scan.symlinks)} symlink(s) skipped:")
-        _print_capped([f"{p} -> {t}" for p, t in scan.symlinks], None)
-
-    return {
-        "pulled": 0,
-        "pushed": 0,
-        "conflicts": 0,
-        "errors": 0,
-        "untracked": list(scan.untracked),
-        "excluded_count": len(scan.excluded),
-        "symlinks": [{"path": p, "target": t} for p, t in scan.symlinks],
-        "conflicts_pending": [],
-        "missing_local": [],
-    }

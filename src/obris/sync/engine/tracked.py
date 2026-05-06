@@ -6,20 +6,22 @@ it once per item after resolving the item's target relative directory.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import click
 
-from ..constants import CONFLICT, PULLED, PUSHED
+# Defer push when the file was modified within this many seconds —
+# treats sub-window edits as "still in progress" so we don't push
+# half-saved content. 2s is enough to ride out a Save All, not so
+# long that interactive workflows feel laggy.
+_MTIME_STABILITY_WINDOW = 2.0
+
+from obris.api.client import ConcurrentWriteError
+
+from ..constants import CONFLICT, MISSING, PULLED, PUSHED
 from ..io import pull_item, push_file
-from ..mapping import (
-    conflict_filename,
-    hash_bytes,
-    hash_file,
-    now_iso,
-    parse_timestamp,
-    unique_filename,
-)
+from ..mapping import hash_file, now_iso, unique_filename
 from .subtree import display_path, safe_pull
 
 
@@ -47,19 +49,16 @@ def sync_tracked_item(topic_id, item, entry, state, sync_dir, desired_rel, *, dr
                 click.echo(f"  Moved {old_display} -> {new_display}")
                 # Persist the move immediately. Subsequent content-change
                 # branches will overwrite this entry with a fresh hash +
-                # timestamp if they run, but if none do (the body didn't
-                # change and the server didn't bump updated_at) this is
-                # the only write that reflects the new on-disk location.
-                # Without it, a reparent-only sync would leave state
-                # pointing at the old path and next sync would keep
-                # trying to re-do the move against a non-existent src.
+                # revision if they run, but if none do (the body didn't
+                # change and the server didn't bump revision) this is the
+                # only write that reflects the new on-disk location.
                 state.track(
                     item.id,
                     filename,
-                    entry.local_hash,
-                    entry.last_synced_at,
                     topic_id=item.topic_id,
-                    pushed_hash=entry.pushed_hash,
+                    last_seen_revision=entry.last_seen_revision,
+                    last_seen_content_hash=entry.last_seen_content_hash,
+                    mtime_at_last_sync=entry.mtime_at_last_sync,
                 )
         current_rel = desired_rel
 
@@ -67,49 +66,30 @@ def sync_tracked_item(topic_id, item, entry, state, sync_dir, desired_rel, *, dr
     local_hash = _hash_if_exists(local_path)
 
     if local_hash is None:
-        remote_name = item.title or filename
         display = display_path(current_rel, filename)
         if dry_run:
-            click.echo(f"  Would untrack {display} (file missing)")
-        else:
-            click.echo(f'  Missing: {display} (was synced to "{remote_name}")')
-            click.echo("    This file will no longer sync with its remote item.")
-            click.echo(f"    To relink after a rename: obris sync link <new-filename> -i {item.id}")
-            state.untrack(item.id)
-        return None
+            click.echo(f"  Would warn: {display} missing locally (knowledge_id {item.id})")
+            return MISSING
+        # Keep the state entry intact and don't pull in this pass. The
+        # pull-as-new branch in run.py only fires for untracked ids, so
+        # leaving the entry here means a deleted file doesn't silently
+        # reappear next sync. Resolution requires explicit user action,
+        # surfaced via copy-pasteable commands below.
+        click.echo(f"  Missing locally: {display}  (knowledge_id {item.id})")
+        click.echo("    Options:")
+        click.echo(f"      obris sync link <new-path> -i {item.id}    # moved or renamed")
+        click.echo(f"      obris sync untrack {item.id}               # keep both copies, stop syncing")
+        click.echo(f"      obris knowledge delete {item.id}           # remove the remote item")
+        return MISSING
 
-    local_changed = local_hash != entry.local_hash
-    remote_changed = bool(item.updated_at) and parse_timestamp(item.updated_at) > parse_timestamp(entry.last_synced_at)
+    local_changed = bool(entry.last_seen_content_hash) and local_hash != entry.last_seen_content_hash
+    remote_changed = item.revision > entry.last_seen_revision
 
-    if local_changed and remote_changed:
-        display = display_path(current_rel, filename)
-        if dry_run:
-            click.echo(f"  Would conflict: {display} (remote would win, local saved as conflict)")
-            return CONFLICT
-
-        conflict_name = unique_filename(sync_dir, current_rel, conflict_filename(filename))
-        backup = sync_dir / current_rel / conflict_name
-        local_path.rename(backup)
-        try:
-            new_hash = safe_pull(lambda tmp: pull_item(item, tmp), sync_dir / current_rel, filename)
-        except Exception:
-            try:
-                backup.rename(local_path)
-            except OSError:
-                click.echo(
-                    f"  Warning: could not restore {display}, your copy is at {conflict_name}",
-                    err=True,
-                )
-            raise
-        state.track(
-            item.id,
-            filename,
-            new_hash,
-            item.updated_at or now_iso(),
-            topic_id=item.topic_id,
-        )
-        click.echo(f"  Conflict: {display} \u2014 remote kept, local saved as {conflict_name}")
-        return CONFLICT
+    # When both sides diverged the push branch fires first; its
+    # If-Match returns 412 and the existing ConcurrentWriteError
+    # handler marks the item conflicted. The pull branch never sees
+    # the both-changed case because we'd return CONFLICT before
+    # reaching it.
 
     if local_changed:
         display = display_path(current_rel, filename)
@@ -117,41 +97,74 @@ def sync_tracked_item(topic_id, item, entry, state, sync_dir, desired_rel, *, dr
             click.echo(f"  Would push {display}")
             return PUSHED
 
-        result = push_file(topic_id, item.id, local_path, item)
-        synced_at = result.get("updated_at") or now_iso()
+        # mtime-stability: if the file was modified less than 2 seconds
+        # ago, treat it as mid-edit and defer to the next pass. Cheap
+        # guard against pushing a partially-saved file without needing
+        # a filesystem watcher.
+        try:
+            mtime = local_path.stat().st_mtime
+            if time.time() - mtime < _MTIME_STABILITY_WINDOW:
+                return None
+        except OSError:
+            # File vanished between the hash check above and now —
+            # let the normal flow handle it (next sync sees it missing).
+            return None
+
+        try:
+            result = push_file(
+                topic_id,
+                item.id,
+                local_path,
+                item,
+                if_match=entry.last_seen_revision,
+            )
+        except ConcurrentWriteError as exc:
+            # Server's revision moved past entry.last_seen_revision —
+            # someone else wrote between our last sync and this push.
+            # Keep the local edit, mark conflicted, surface the divergence.
+            # Resolution is explicit (sync conflicts resolve), same UX as
+            # the local-vs-remote conflict path.
+            state.mark_conflict(
+                item.id,
+                detected_at=now_iso(),
+                remote_updated_at=item.updated_at or "",
+                local_hash=local_hash,
+            )
+            click.echo(f"  Conflict (concurrent write): {display}  (knowledge_id {item.id})")
+            click.echo(f"    Local hash:      {local_hash[:12]}…")
+            click.echo(f"    Server revision: {exc.current_revision}")
+            if exc.current_content_hash:
+                click.echo(f"    Server hash:     {exc.current_content_hash[:12]}…")
+            click.echo("    Resolve:")
+            click.echo(f"      obris sync conflicts resolve {filename} --keep-local")
+            click.echo(f"      obris sync conflicts resolve {filename} --keep-remote")
+            return CONFLICT
         state.track(
             item.id,
             filename,
-            local_hash,
-            synced_at,
             topic_id=item.topic_id,
-            pushed_hash=local_hash,
+            last_seen_revision=int(result.get("revision") or 0),
+            last_seen_content_hash=result.get("content_hash") or local_hash,
+            mtime_at_last_sync=mtime,
         )
         click.echo(f"  Pushed {display}")
         return PUSHED
 
     if remote_changed:
-        if entry.pushed_hash and local_hash == entry.pushed_hash:
+        # Server tells us its current canonical hash; if local already
+        # matches, the revision bump didn't change content (a no-op
+        # save, a metadata-only edit, or our own previous push echoing
+        # back). Just record the new revision and skip the download.
+        if item.content_hash and item.content_hash == local_hash:
             state.track(
                 item.id,
                 filename,
-                local_hash,
-                item.updated_at or now_iso(),
                 topic_id=item.topic_id,
+                last_seen_revision=item.revision,
+                last_seen_content_hash=item.content_hash,
+                mtime_at_last_sync=_safe_mtime(local_path),
             )
             return None
-
-        if item.content:
-            remote_hash = hash_bytes(item.content)
-            if remote_hash == local_hash:
-                state.track(
-                    item.id,
-                    filename,
-                    local_hash,
-                    item.updated_at or now_iso(),
-                    topic_id=item.topic_id,
-                )
-                return None
 
         display = display_path(current_rel, filename)
         if dry_run:
@@ -159,34 +172,28 @@ def sync_tracked_item(topic_id, item, entry, state, sync_dir, desired_rel, *, dr
             return PULLED
 
         new_hash = safe_pull(lambda tmp: pull_item(item, tmp), sync_dir / current_rel, filename)
-        if new_hash == local_hash:
-            state.track(
-                item.id,
-                filename,
-                local_hash,
-                item.updated_at or now_iso(),
-                topic_id=item.topic_id,
-            )
-            return None
         state.track(
             item.id,
             filename,
-            new_hash,
-            item.updated_at or now_iso(),
             topic_id=item.topic_id,
+            last_seen_revision=item.revision,
+            last_seen_content_hash=item.content_hash or new_hash,
+            mtime_at_last_sync=_safe_mtime(local_path),
         )
-        click.echo(f"  Pulled {display}")
-        return PULLED
+        if new_hash != local_hash:
+            click.echo(f"  Pulled {display}")
+            return PULLED
+        return None
 
     # No content change, but make sure topic_id is recorded for older state files.
     if not entry.topic_id and item.topic_id:
         state.track(
             item.id,
             filename,
-            local_hash,
-            entry.last_synced_at,
             topic_id=item.topic_id,
-            pushed_hash=entry.pushed_hash,
+            last_seen_revision=entry.last_seen_revision,
+            last_seen_content_hash=entry.last_seen_content_hash,
+            mtime_at_last_sync=entry.mtime_at_last_sync,
         )
 
     return None
@@ -196,3 +203,10 @@ def _hash_if_exists(filepath):
     if Path(filepath).exists():
         return hash_file(filepath)
     return None
+
+
+def _safe_mtime(filepath) -> float:
+    try:
+        return Path(filepath).stat().st_mtime
+    except OSError:
+        return 0.0

@@ -53,6 +53,14 @@ class SyncState:
         self._items = {kid: TrackedItem.from_dict(entry) for kid, entry in raw.items()}
         self._topic_dirs = dict(data.get("topic_dirs", {})) if data else {}
         self._include_patterns = list(data.get("include_patterns", [])) if data else []
+        self._exclude_patterns = list(data.get("exclude_patterns", [])) if data else []
+        self._unlinked_ids = list(data.get("unlinked_ids", [])) if data else []
+        self._conflicts = dict(data.get("conflicts", {})) if data else {}
+        # Per-target ETag cache: topic_id -> root_hash from the last
+        # successful sync-state response. Lets the next sync send
+        # If-None-Match and short-circuit on 304 when the subtree
+        # hasn't changed remotely.
+        self._last_seen_root_hash = dict(data.get("last_seen_root_hash", {})) if data else {}
 
     @classmethod
     def load(cls, topic_id, local_path):
@@ -89,6 +97,10 @@ class SyncState:
             "last_sync": now_iso(),
             "topic_dirs": self._topic_dirs,
             "include_patterns": self._include_patterns,
+            "exclude_patterns": self._exclude_patterns,
+            "unlinked_ids": self._unlinked_ids,
+            "conflicts": self._conflicts,
+            "last_seen_root_hash": self._last_seen_root_hash,
             "items": {kid: item.to_dict() for kid, item in self._items.items()},
         }
         tmp.write_text(json.dumps(data, indent=2) + "\n")
@@ -118,6 +130,30 @@ class SyncState:
     def set_include_patterns(self, patterns: list[str]):
         self._include_patterns = list(patterns)
 
+    # -- Exclude patterns --
+
+    @property
+    def exclude_patterns(self) -> list[str]:
+        return list(self._exclude_patterns)
+
+    def add_excludes(self, patterns) -> list[str]:
+        """Add patterns; return the subset that was actually new (idempotent)."""
+        added = []
+        for p in patterns:
+            if p and p not in self._exclude_patterns:
+                self._exclude_patterns.append(p)
+                added.append(p)
+        return added
+
+    def remove_excludes(self, patterns) -> list[str]:
+        """Remove patterns; return the subset that was actually present (idempotent)."""
+        removed = []
+        for p in patterns:
+            if p in self._exclude_patterns:
+                self._exclude_patterns.remove(p)
+                removed.append(p)
+        return removed
+
     # -- Item tracking --
 
     @property
@@ -132,20 +168,26 @@ class SyncState:
         self,
         knowledge_id,
         filename,
-        local_hash,
-        last_synced_at,
         *,
         topic_id="",
-        pushed_hash="",
+        last_seen_revision=0,
+        last_seen_content_hash="",
+        mtime_at_last_sync=0.0,
     ):
-        """Add or update a tracked item."""
+        """Add or update a tracked item.
+
+        Clears any "do-not-auto-re-pull" marker for this id — re-tracking
+        means the user wants the item synced again.
+        """
         self._items[knowledge_id] = TrackedItem(
             filename=filename,
-            local_hash=local_hash,
-            last_synced_at=last_synced_at,
             topic_id=topic_id,
-            pushed_hash=pushed_hash,
+            last_seen_revision=last_seen_revision,
+            last_seen_content_hash=last_seen_content_hash,
+            mtime_at_last_sync=mtime_at_last_sync,
         )
+        if knowledge_id in self._unlinked_ids:
+            self._unlinked_ids.remove(knowledge_id)
 
     def find_by_filename(self, filename):
         """Find a tracked item by local filename. Returns (knowledge_id, entry) or (None, None)."""
@@ -163,3 +205,61 @@ class SyncState:
 
     def tracked_ids(self):
         return set(self._items.keys())
+
+    # -- Unlinked (do-not-auto-re-pull) markers --
+
+    @property
+    def unlinked_ids(self) -> list[str]:
+        return list(self._unlinked_ids)
+
+    def mark_unlinked(self, knowledge_id):
+        """Record that ``knowledge_id`` should not be auto-re-pulled.
+
+        Used by ``obris sync untrack`` so subsequent syncs don't yank
+        the remote copy back down. Cleared automatically by ``track``.
+        """
+        if knowledge_id and knowledge_id not in self._unlinked_ids:
+            self._unlinked_ids.append(knowledge_id)
+
+    def is_unlinked(self, knowledge_id) -> bool:
+        return knowledge_id in self._unlinked_ids
+
+    # -- Conflict markers --
+
+    @property
+    def conflicts(self) -> dict[str, dict]:
+        return {kid: dict(meta) for kid, meta in self._conflicts.items()}
+
+    def mark_conflict(self, knowledge_id, *, detected_at, remote_updated_at, local_hash):
+        """Record that ``knowledge_id`` is in conflict.
+
+        Subsequent syncs skip the item for both push and pull until
+        ``clear_conflict`` is called (typically by ``obris sync
+        conflicts resolve``).
+        """
+        self._conflicts[knowledge_id] = {
+            "detected_at": detected_at,
+            "remote_updated_at": remote_updated_at,
+            "local_hash_at_conflict": local_hash,
+        }
+
+    def clear_conflict(self, knowledge_id):
+        self._conflicts.pop(knowledge_id, None)
+
+    def get_conflict(self, knowledge_id) -> dict | None:
+        meta = self._conflicts.get(knowledge_id)
+        return dict(meta) if meta else None
+
+    def is_conflicted(self, knowledge_id) -> bool:
+        return knowledge_id in self._conflicts
+
+    # -- Per-target root-hash cache (sync-state ETag) --
+
+    def get_root_hash(self, topic_id) -> str | None:
+        return self._last_seen_root_hash.get(topic_id)
+
+    def set_root_hash(self, topic_id, root_hash):
+        if root_hash:
+            self._last_seen_root_hash[topic_id] = root_hash
+        else:
+            self._last_seen_root_hash.pop(topic_id, None)

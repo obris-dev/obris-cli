@@ -1,9 +1,4 @@
-"""Topic resolution helpers shared by sync commands.
-
-Kept out of ``obris.commands.sync`` to keep the command file under
-the 300-line cap and so other sync commands can reuse the same
-resolver logic without a command-layer import.
-"""
+"""Topic resolution helpers shared by sync commands."""
 
 from __future__ import annotations
 
@@ -18,23 +13,14 @@ from .state import SyncState
 _MAX_ANCESTOR_DEPTH = 64
 
 
-class SubtopicTargetError(SystemExit):
-    """Raised when a sync target is a subtopic rather than a root topic.
-
-    Subclasses ``SystemExit`` so it still exits the process with a
-    clean message in single-pass mode, but callers (notably the watch
-    loops) can catch it specifically to break out of the iteration
-    instead of re-logging the same error forever.
-    """
-
-
-def resolve_targets(sync_dir: Path, topic_id: str | None, yes: bool) -> list[tuple]:
+def resolve_targets(sync_dir: Path, topic_id: str | None, *, no_create: bool = False) -> list[tuple]:
     """Determine which topic(s) to sync.
 
     Returns a list of ``(SyncState | None, topic_id, topic_name)``
-    tuples. When no explicit topic is given and no state exists, the
-    user is prompted (or auto-confirmed via ``yes``) to create a new
-    root topic named after the directory.
+    tuples. When no explicit topic is given and no state exists, a
+    new root topic named after the directory is created automatically.
+    Pass ``no_create=True`` to error instead of bootstrapping — the
+    safety net for AI agents and scripts that don't want surprises.
     """
     if topic_id:
         state = SyncState.load(topic_id, sync_dir)
@@ -50,11 +36,15 @@ def resolve_targets(sync_dir: Path, topic_id: str | None, yes: bool) -> list[tup
             targets.append((state, tid, topic.name))
         return targets
 
+    if no_create:
+        raise SystemExit(
+            f"No synced topic for {sync_dir}/. "
+            f"Run without --no-create to create one, or pass --topic <id> to link an existing topic."
+        )
+
     topic_name = sync_dir.name
-    if not yes:
-        click.confirm(f'Create topic "{topic_name}" and sync to {sync_dir}/?', default=True, abort=True)
     topic = create_topic(topic_name)
-    click.echo(f'Created topic "{topic_name}"')
+    click.echo(f'Created topic "{topic_name}" ({topic.id}).')
     return [(None, topic.id, topic_name)]
 
 
@@ -85,17 +75,11 @@ def find_root_id(topic_id: str, topic=None) -> str:
 
 
 def assert_all_roots(targets, sync_dir: Path) -> None:
-    """Raise ``SubtopicTargetError`` if any target isn't a root topic.
-
-    ``targets`` is the list of ``(state, topic_id, topic_name)``
-    tuples returned by ``resolve_targets``. Called as a preflight so
-    all three sync paths (single-pass, foreground watch, background
-    watch) fail fast with the same error before entering their loops.
-    """
+    """Raise ``SystemExit`` if any target isn't a root topic."""
     for _state, tid, name in targets:
         root = find_root(tid)
         if root.id != tid:
-            raise SubtopicTargetError(
+            raise SystemExit(
                 f'"{name}" is a subtopic of "{root.name}". '
                 f"Sync from the root topic instead:\n"
                 f"  obris sync --topic {root.id} --path {sync_dir}"

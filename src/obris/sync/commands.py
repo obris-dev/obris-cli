@@ -2,10 +2,10 @@
 
 from pathlib import Path
 
-from obris.api.knowledge import knowledge_add
+from obris.api.knowledge import knowledge_add, knowledge_detail
 from obris.utils.upload import upload_file
 
-from .mapping import hash_file, now_iso, read_if_text
+from .mapping import hash_file, read_if_text
 from .state import SyncState
 
 
@@ -39,8 +39,14 @@ def add_file(root_topic_id, sync_dir, filepath, *, target_topic_id=None):
     else:
         result = upload_file(target_topic_id, filepath, filename)
 
-    synced_at = result.get("updated_at") or result.get("created_at") or now_iso()
-    state.track(result["id"], filename, file_hash, synced_at, topic_id=target_topic_id)
+    state.track(
+        result["id"],
+        filename,
+        topic_id=target_topic_id,
+        last_seen_revision=int(result.get("revision") or 0),
+        last_seen_content_hash=result.get("content_hash") or file_hash,
+        mtime_at_last_sync=filepath.stat().st_mtime,
+    )
     state.save()
 
     return result
@@ -50,6 +56,10 @@ def link_file(root_topic_id, sync_dir, filepath, knowledge_id, *, target_topic_i
     """Link a local file to an existing remote item.
 
     Use after renaming a local file to reattach it to its remote item.
+    Pulls the item's current revision so the next sync's OCC checks
+    have a stable token to compare against; without this, the next
+    sync would treat any positive remote revision as "remote moved"
+    and pull-overwrite the local copy the user just relinked.
     """
     sync_dir = Path(sync_dir)
     filepath = Path(filepath)
@@ -62,5 +72,14 @@ def link_file(root_topic_id, sync_dir, filepath, knowledge_id, *, target_topic_i
 
     filename = filepath.name
     file_hash = hash_file(filepath)
-    state.track(knowledge_id, filename, file_hash, now_iso(), topic_id=target_topic_id)
+
+    detail = knowledge_detail(knowledge_id)
+    state.track(
+        knowledge_id,
+        filename,
+        topic_id=target_topic_id,
+        last_seen_revision=int(detail.get("revision") or 0),
+        last_seen_content_hash=detail.get("content_hash") or file_hash,
+        mtime_at_last_sync=filepath.stat().st_mtime,
+    )
     state.save()

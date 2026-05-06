@@ -1,5 +1,5 @@
 from obris import routes
-from obris.api.client import get, post
+from obris.api.client import get, get_etagged, post
 from obris.sync.models import RemoteTopic
 
 
@@ -47,14 +47,40 @@ def get_topic(topic_id) -> RemoteTopic:
     return RemoteTopic.from_api(get(routes.topic(topic_id), action="Get topic"))
 
 
-def create_topic(name) -> RemoteTopic:
-    return RemoteTopic.from_api(post(routes.topics(), json={"name": name}, action="Create topic"))
+def create_topic(name, *, parent_id: str | None = None) -> RemoteTopic:
+    payload: dict = {"name": name}
+    if parent_id:
+        payload["parent_id"] = parent_id
+    return RemoteTopic.from_api(post(routes.topics(), json=payload, action="Create topic"))
 
 
 def fetch_subtree(topic_id) -> list[RemoteTopic]:
     """Return ``RemoteTopic`` entries for the topic and all descendants."""
     raw = get(routes.topic_subtree(topic_id), action="Fetch topic subtree", unwrap=True)
     return [RemoteTopic.from_api(r) for r in raw]
+
+
+def fetch_sync_state(topic_id, *, if_none_match=None):
+    """Return the sync-state manifest for a root topic, or None on 304.
+
+    Manifest shape (when not 304)::
+
+        {
+          "root_hash": "<sha256>",
+          "topics": {"<tid>": {"parent_id", "name", "subtree_hash"}},
+          "items":  {"<kid>": {"content_hash", "revision", "topic_id",
+                                "filename", "source_type"}}
+        }
+
+    A returned ``None`` means the server's root_hash matches
+    ``if_none_match`` — the subtree is unchanged remotely and the caller
+    should reuse its cached view.
+    """
+    return get_etagged(
+        routes.topic_sync_state(topic_id),
+        if_none_match=if_none_match,
+        action="Fetch sync state",
+    )
 
 
 def list_knowledge(topic_id):

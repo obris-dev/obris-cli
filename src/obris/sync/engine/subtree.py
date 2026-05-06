@@ -1,8 +1,8 @@
 """Subtree path helpers and directory reconciliation for sync.
 
-All functions here are pure-logic or filesystem-only — they don't hit
-the API except ``fetch_topic_items``, which delegates to the topics API
-client.
+All functions here are pure-logic or filesystem-only — the engine no
+longer fetches per-topic items here; everything comes through the
+sync-state manifest now.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from pathlib import Path
 
 import click
 
-from obris.api.topics import iter_knowledge
 from obris.sync.models import RemoteTopic
 
 MAX_WALK_DEPTH = 64
@@ -129,19 +128,6 @@ def reconcile_topic_dirs(state, desired_topic_dirs, path_ids, sync_dir, *, dry_r
                     dst.mkdir(parents=True, exist_ok=True)
                 state.set_topic_dir(tid, desired)
                 click.echo(f"  Moved directory {existing}/ -> {desired}/")
-
-
-def fetch_topic_items(root_topic_id, target_topic_id, *, use_recursive):
-    """Yield raw knowledge dicts for ``target_topic_id``.
-
-    When ``use_recursive`` is True and ``target_topic_id`` is the root,
-    we fetch the whole subtree in one paginated stream via
-    ``?recursive=true``. Otherwise we fetch just the one topic's items.
-    """
-    if use_recursive and target_topic_id == root_topic_id:
-        yield from iter_knowledge(root_topic_id, recursive=True)
-    else:
-        yield from iter_knowledge(target_topic_id, recursive=False)
 
 
 def display_path(relative_dir: str, filename: str) -> str:

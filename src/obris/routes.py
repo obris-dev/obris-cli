@@ -13,8 +13,16 @@ def topic_subtree(topic_id):
     return f"v1/topics/{topic_id}/subtree"
 
 
+def topic_sync_state(topic_id):
+    return f"v1/topics/{topic_id}/sync-state"
+
+
 def topic_knowledge(topic_id):
     return f"v1/topics/{topic_id}/knowledge"
+
+
+def topic_knowledge_bulk_add(topic_id):
+    return f"v1/topics/{topic_id}/knowledge/bulk-add"
 
 
 def topic_knowledge_item(topic_id, item_id):

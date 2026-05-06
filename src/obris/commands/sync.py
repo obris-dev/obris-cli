@@ -3,18 +3,13 @@ from pathlib import Path
 import click
 
 from obris.api.topics import get_topic
+from obris.commands.sync_config import register as _register_config_subcommands
+from obris.commands.sync_conflicts import register as _register_conflicts_subgroup
 from obris.output import as_json, is_json
 from obris.sync.commands import add_file, link_file
-from obris.sync.daemon import (
-    DaemonError,
-    run_watcher_from_config,
-    spawn_background_watcher,
-)
-from obris.sync.daemon_control import daemon_info, read_daemon_log_tail, stop_daemon
-from obris.sync.resolver import SubtopicTargetError, assert_all_roots, find_root_id, resolve_targets
+from obris.sync.resolver import assert_all_roots, find_root_id, resolve_targets
 from obris.sync.runner import run_sync_pass
 from obris.sync.state import SyncState
-from obris.sync.watch import run_watch_loop
 
 
 @click.group("sync", invoke_without_command=True)
@@ -29,29 +24,22 @@ from obris.sync.watch import run_watch_loop
     "Supports ** for any depth, * ? [abc] within a segment. Example: 'Projects/**' or '**/skill-*'",
 )
 @click.option("--dry-run", is_flag=True, help="Preview changes without modifying anything")
-@click.option("-y", "--yes", is_flag=True, help="Auto-confirm prompts")
+@click.option("--add-all", "add_all_files", is_flag=True, help="Upload every untracked local file after syncing.")
 @click.option(
-    "--watch",
-    "watch",
+    "--no-create",
+    "no_create",
     is_flag=True,
-    help="Keep syncing on an interval until interrupted (Ctrl-C).",
+    help="Error instead of creating a root topic when the directory has no sync state.",
 )
 @click.option(
-    "--interval",
-    "interval",
-    type=click.IntRange(min=5),
-    default=30,
-    show_default=True,
-    help="Seconds between watch iterations. Minimum 5.",
-)
-@click.option(
-    "--background",
-    "background",
+    "--no-subtopics",
+    "no_subtopics",
     is_flag=True,
-    help="With --watch, detach and run as a background daemon. Manage with 'obris sync status' and 'obris sync stop'.",
+    help="With --add-all, skip files in subdirs instead of creating matching subtopics.",
 )
+@click.option("-v", "--verbose", "verbose", is_flag=True, help="List every untracked / excluded / symlink path.")
 @click.pass_context
-def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, yes, watch, interval, background):
+def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, add_all_files, no_create, no_subtopics, verbose):
     """Sync a local directory with an Obris root topic and its subtopics.
 
     On first sync, provide --topic <id> to link to an existing root topic,
@@ -64,6 +52,9 @@ def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, yes, watch, i
 
     Use --include to sync only matching subtopics. Patterns OR together.
     Use --item to sync specific items only.
+
+    --add-all uploads every untracked file under the synced directory,
+    creating subtopics on the server to mirror local subdir structure.
     """
     ctx.ensure_object(dict)
     ctx.obj["path"] = path
@@ -72,58 +63,11 @@ def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, yes, watch, i
     if ctx.invoked_subcommand is not None:
         return
 
-    if background and not watch:
-        raise click.UsageError("--background requires --watch.")
-    if dry_run and watch:
-        raise click.UsageError("--dry-run cannot be combined with --watch.")
-
     sync_dir = Path(path).resolve()
     patterns = list(include_patterns) if include_patterns else None
 
-    targets = resolve_targets(sync_dir, topic_id, yes)
-    # Preflight subtopic check for all three paths (single-pass,
-    # foreground watch, background watch). Without this, the foreground
-    # watch would log the same "subtopic" error every iteration forever,
-    # and the background watcher would silently start but never progress.
+    targets = resolve_targets(sync_dir, topic_id, no_create=no_create)
     assert_all_roots(targets, sync_dir)
-
-    if background:
-        try:
-            info = spawn_background_watcher(
-                sync_dir=sync_dir,
-                targets=[(tid, name) for _state, tid, name in targets],
-                item_ids=list(item_ids) if item_ids else None,
-                include_patterns=patterns,
-                interval=interval,
-            )
-        except DaemonError as e:
-            raise SystemExit(str(e)) from e
-        click.echo(f"Watching {sync_dir}/ every {interval}s in background (pid {info['pid']}).")
-        click.echo(f"  Log:  {info['log']}")
-        click.echo(f"  Stop: obris sync stop -p {sync_dir}")
-        return
-
-    if watch:
-        click.echo(f"Watching {sync_dir}/ every {interval}s. Press Ctrl-C to stop.")
-        try:
-            run_watch_loop(
-                run_once=lambda: run_sync_pass(
-                    sync_dir,
-                    targets,
-                    item_ids,
-                    patterns,
-                    dry_run=False,
-                    quiet_if_clean=True,
-                ),
-                interval=interval,
-            )
-        except KeyboardInterrupt:
-            click.echo("\nStopped.")
-        except SubtopicTargetError as e:
-            # Mid-watch reparent: exit cleanly with the same message
-            # format as the preflight, instead of spinning.
-            raise SystemExit(str(e)) from None
-        return
 
     totals = run_sync_pass(
         sync_dir,
@@ -131,7 +75,9 @@ def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, yes, watch, i
         item_ids,
         patterns,
         dry_run=dry_run,
-        quiet_if_clean=False,
+        add_all_files=add_all_files,
+        allow_subtopics=not no_subtopics,
+        verbose=verbose,
     )
 
     if is_json():
@@ -142,6 +88,11 @@ def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, yes, watch, i
                 "pushed": totals["pushed"],
                 "conflicts": totals["conflicts"],
                 "errors": totals["errors"],
+                "untracked": totals["untracked"],
+                "excluded_count": totals["excluded_count"],
+                "symlinks": totals["symlinks"],
+                "conflicts_pending": totals["conflicts_pending"],
+                "missing_local": totals["missing_local"],
             }
         )
 
@@ -253,48 +204,8 @@ def sync_link(file, item_id, topic_id):
     click.echo(f'Linked "{filepath.name}" to item {item_id}')
 
 
-@sync.command("status")
-@click.option("--path", "-p", default=".", help="Local directory to check (defaults to current directory)")
-@click.option("--log-lines", "log_lines", type=int, default=10, show_default=True, help="Tail of log lines to print.")
-def sync_status(path, log_lines):
-    """Show background watcher status for a synced directory."""
-    sync_dir = Path(path).resolve()
-    info = daemon_info(sync_dir)
-    if info is None:
-        click.echo(f"No background watcher for {sync_dir}/.")
-        return
-    click.echo(f"Watcher for {sync_dir}/")
-    click.echo(f"  PID:      {info['pid']} ({'running' if info['alive'] else 'dead — stale pidfile'})")
-    click.echo(f"  Started:  {info.get('started_at', '?')}")
-    click.echo(f"  Interval: {info.get('interval', '?')}s")
-    topics = info.get("topics") or []
-    if topics:
-        click.echo("  Topics:")
-        for t in topics:
-            click.echo(f"    {t['name']} ({t['id']})")
-    click.echo(f"  Log:      {info['log']}")
-    if log_lines:
-        tail = read_daemon_log_tail(sync_dir, log_lines)
-        if tail:
-            click.echo("  Last log:")
-            for line in tail:
-                click.echo(f"    {line}")
-
-
-@sync.command("stop")
-@click.option("--path", "-p", default=".", help="Local directory whose watcher to stop")
-def sync_stop(path):
-    """Stop a background sync watcher."""
-    sync_dir = Path(path).resolve()
-    stopped = stop_daemon(sync_dir)
-    if stopped is None:
-        click.echo(f"No background watcher for {sync_dir}/.")
-        return
-    click.echo(f"Stopped watcher (pid {stopped}) for {sync_dir}/.")
-
-
-@sync.command("_watcher", hidden=True)
-@click.argument("config_path")
-def sync_watcher_entry(config_path):
-    """Internal entry point launched by `--background`. Do not call directly."""
-    run_watcher_from_config(Path(config_path))
+# Per-checkout configuration subcommands (exclude / include / untrack)
+# and the conflicts subgroup live in separate modules to keep this
+# file under the 300-line cap.
+_register_config_subcommands(sync)
+_register_conflicts_subgroup(sync)

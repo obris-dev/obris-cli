@@ -118,14 +118,30 @@ _PATH_SEP_TRANSLATE = str.maketrans({"/": "-", "\\": "-"})
 def slugify_topic_name(name: str) -> str:
     """Convert a topic name into a safe directory component.
 
-    Strips path separators (prevents traversal), drops Windows-hostile
-    trailing chars, preserves unicode/spaces, no case-folding. Returns
-    "untitled" if the name slugifies away to nothing.
+    Translates path separators to dashes — actual traversal defense, not
+    aesthetics — and bottoms out at "untitled" when the name leaves
+    nothing safe to use (empty, ``.``, or ``..``). Otherwise the topic
+    name passes through unchanged: leading dots, trailing dots, leading
+    or trailing whitespace, unicode, case — all preserved.
+
+    Why so minimal: if a topic was created with a particular name (via
+    the CLI itself, the web app, or an MCP tool), that name *is* the
+    user's intent. Stripping leading dots silently renames ``.claude/``
+    to ``claude/`` on first sync; stripping trailing dots breaks
+    ``foo./``; trimming whitespace breaks ``"  intentional  "``.
+    Cross-platform pain (Windows-hostile trailing dots, APFS case
+    folding) is addressed when it actually comes up, not pre-emptively
+    at the cost of common AI-tool config dirs.
     """
-    name = (name or "").strip()
+    name = name or ""
     name = name.translate(_PATH_SEP_TRANSLATE)
-    name = Path(name).name  # defense-in-depth against any remaining traversal
-    name = name.strip(" .")
+    name = Path(name).name  # blocks `.` and leftover `/foo` traversal
+    # ``Path("..").name`` keeps ``..`` verbatim (POSIX quirk: it's a
+    # legal path component, just dangerous as a directory name).
+    # Catch it explicitly so a topic named ``..`` doesn't materialize
+    # as the parent directory at sync time.
+    if name == "..":
+        name = ""
     return name or "untitled"
 
 

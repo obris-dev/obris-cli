@@ -13,7 +13,13 @@ from .state import SyncState
 _MAX_ANCESTOR_DEPTH = 64
 
 
-def resolve_targets(sync_dir: Path, topic_id: str | None, *, no_create: bool = False) -> list[tuple]:
+def resolve_targets(
+    sync_dir: Path,
+    topic_id: str | None,
+    *,
+    no_create: bool = False,
+    dry_run: bool = False,
+) -> list[tuple]:
     """Determine which topic(s) to sync.
 
     Returns a list of ``(SyncState | None, topic_id, topic_name)``
@@ -21,6 +27,11 @@ def resolve_targets(sync_dir: Path, topic_id: str | None, *, no_create: bool = F
     new root topic named after the directory is created automatically.
     Pass ``no_create=True`` to error instead of bootstrapping — the
     safety net for AI agents and scripts that don't want surprises.
+
+    With ``dry_run=True``, the bootstrap branch returns an empty list
+    instead of calling ``create_topic`` so a preview of a fresh-dir
+    sync doesn't leave a phantom topic on the server. The caller
+    emits a local-only preview when this happens.
     """
     if topic_id:
         state = SyncState.load(topic_id, sync_dir)
@@ -41,6 +52,9 @@ def resolve_targets(sync_dir: Path, topic_id: str | None, *, no_create: bool = F
             f"No synced topic for {sync_dir}/. "
             f"Run without --no-create to create one, or pass --topic <id> to link an existing topic."
         )
+
+    if dry_run:
+        return []
 
     topic_name = sync_dir.name
     topic = create_topic(topic_name)

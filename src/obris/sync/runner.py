@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import click
 
@@ -168,3 +168,84 @@ def _print_capped(items, cap):
         click.echo(f"  {line}")
     if cap is not None and len(items) > cap:
         click.echo(f"  ... ({len(items) - cap} more)")
+
+
+def preview_first_sync(sync_dir: Path, *, add_all_files: bool, allow_subtopics: bool) -> dict:
+    """Local-only dry-run preview for a fresh directory.
+
+    Called when ``resolve_targets`` returned ``[]`` (dry-run + no
+    state + no ``--topic``). Side-effect free: walks the dir using a
+    synthetic empty ``SyncState`` so ``find_untracked`` reuses the
+    same exclusion + symlink logic the live path uses, then prints
+    what create_topic / _ensure_subtopic_path / add_all would do.
+
+    Ignored files are surfaced unconditionally — the user explicitly
+    asked for the full picture before committing to a real sync.
+
+    Returns the same totals dict shape as ``run_sync_pass`` so the
+    JSON output stays consistent.
+    """
+    sync_dir = Path(sync_dir).resolve()
+    topic_name = sync_dir.name
+    click.echo("  (dry run — no changes will be made)")
+    click.echo(f'  Would create topic "{topic_name}" at {sync_dir}/')
+
+    synthetic = SyncState("__preview__", str(sync_dir))
+    scan = find_untracked(sync_dir, [(synthetic, "__preview__")])
+
+    # Subtopic projection: every directory segment under sync_dir that
+    # contains an untracked file would become a subtopic level. Mirrors
+    # the cache walk in ``scanner._ensure_subtopic_path``.
+    subdirs: set[str] = set()
+    skipped_subdir = 0
+    if allow_subtopics:
+        for rel in scan.untracked:
+            rel_dir = str(PurePosixPath(rel).parent)
+            if rel_dir == ".":
+                continue
+            walked = ""
+            for seg in rel_dir.split("/"):
+                walked = f"{walked}/{seg}" if walked else seg
+                subdirs.add(walked)
+    else:
+        skipped_subdir = sum(1 for rel in scan.untracked if "/" in rel)
+
+    if subdirs:
+        click.echo(f"\nWould create {len(subdirs)} subtopic(s):")
+        for sd in sorted(subdirs):
+            click.echo(f"  {sd}/")
+
+    if scan.untracked:
+        if not add_all_files:
+            click.echo(f"\n{len(scan.untracked)} untracked file(s) (would NOT add — re-run with --add-all):")
+            _print_capped(scan.untracked, None)
+        elif not allow_subtopics:
+            top_level = [r for r in scan.untracked if "/" not in r]
+            click.echo(f"\nWould add {len(top_level)} top-level file(s):")
+            _print_capped(top_level, None)
+            if skipped_subdir:
+                click.echo(f"\nWould skip {skipped_subdir} file(s) in subdirs (--no-subtopics):")
+                _print_capped([r for r in scan.untracked if "/" in r], None)
+        else:
+            click.echo(f"\nWould add {len(scan.untracked)} file(s):")
+            _print_capped(scan.untracked, None)
+
+    if scan.excluded:
+        click.echo(f"\n{len(scan.excluded)} file(s) matched ignore rules:")
+        _print_capped(scan.excluded, None)
+
+    if scan.symlinks:
+        click.echo(f"\n{len(scan.symlinks)} symlink(s) skipped:")
+        _print_capped([f"{p} -> {t}" for p, t in scan.symlinks], None)
+
+    return {
+        "pulled": 0,
+        "pushed": 0,
+        "conflicts": 0,
+        "errors": 0,
+        "untracked": list(scan.untracked),
+        "excluded_count": len(scan.excluded),
+        "symlinks": [{"path": p, "target": t} for p, t in scan.symlinks],
+        "conflicts_pending": [],
+        "missing_local": [],
+    }

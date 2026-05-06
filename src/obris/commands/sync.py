@@ -8,7 +8,7 @@ from obris.commands.sync_conflicts import register as _register_conflicts_subgro
 from obris.output import as_json, is_json
 from obris.sync.commands import add_file, link_file
 from obris.sync.resolver import assert_all_roots, find_root_id, resolve_targets
-from obris.sync.runner import run_sync_pass
+from obris.sync.runner import preview_first_sync, run_sync_pass
 from obris.sync.state import SyncState
 
 
@@ -66,19 +66,28 @@ def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, add_all_files
     sync_dir = Path(path).resolve()
     patterns = list(include_patterns) if include_patterns else None
 
-    targets = resolve_targets(sync_dir, topic_id, no_create=no_create)
-    assert_all_roots(targets, sync_dir)
+    targets = resolve_targets(sync_dir, topic_id, no_create=no_create, dry_run=dry_run)
 
-    totals = run_sync_pass(
-        sync_dir,
-        targets,
-        item_ids,
-        patterns,
-        dry_run=dry_run,
-        add_all_files=add_all_files,
-        allow_subtopics=not no_subtopics,
-        verbose=verbose,
-    )
+    if not targets:
+        # dry-run + no state + no --topic: preview the bootstrap +
+        # initial-add locally without creating a phantom server topic.
+        totals = preview_first_sync(
+            sync_dir,
+            add_all_files=add_all_files,
+            allow_subtopics=not no_subtopics,
+        )
+    else:
+        assert_all_roots(targets, sync_dir)
+        totals = run_sync_pass(
+            sync_dir,
+            targets,
+            item_ids,
+            patterns,
+            dry_run=dry_run,
+            add_all_files=add_all_files,
+            allow_subtopics=not no_subtopics,
+            verbose=verbose,
+        )
 
     if is_json():
         as_json(

@@ -1,17 +1,19 @@
 """File-level exclusion matcher for sync.
 
-Combines three pattern sources, all gitignore-style (``pathspec``'s
-``gitwildmatch``):
+Combines two pattern sources, evaluated in order, gitignore-style
+(``pathspec``'s ``gitwildmatch``):
 
-1. **Built-in defaults** — always applied, hardcoded in this module.
-   Hides VCS metadata, dependency dirs, OS / editor cruft.
-2. **``.obrisignore``** — user-authored, lives at the sync-dir root.
-   The CLI reads it; it never writes to it.
-3. **State-level excludes** — per-checkout, set via
-   ``obris sync exclude``. Plumbed through ``state_excludes`` so this
-   module has no opinion on where they're persisted.
+1. **Built-in defaults** — hardcoded in this module. Hides VCS
+   metadata, dependency dirs, OS / editor cruft, and credential-shaped
+   files.
+2. **State-level rules** — set via ``obris sync exclude`` and
+   ``obris sync include``. Stored as a list of patterns on each
+   ``SyncState``; ``!pattern`` entries are re-includes that override
+   the defaults. The CLI is the only writer.
 
-Supports gitignore semantics including ``!pattern`` re-includes.
+Last match wins (gitignore semantics), so state-level rules can
+always override defaults. Users never hand-edit a config file —
+state is owned by the CLI.
 """
 
 from __future__ import annotations
@@ -51,20 +53,21 @@ DEFAULT_EXCLUDES = [
     # Temp
     "*.tmp",
     "*.bak",
+    # Secrets — common files / dirs that hold credentials. Kept narrow
+    # to literal known-bad paths instead of a blanket dotfile rule so
+    # AI-tool config dirs (.claude/, .cursor/, .github/, etc.) keep
+    # syncing. Users can override any default with
+    # ``obris sync include <pattern>``.
+    ".env",
+    ".env.*",
+    ".envrc",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".aws/",
+    ".gnupg/",
+    ".ssh/",
 ]
-
-OBRISIGNORE = ".obrisignore"
-
-
-def _read_obrisignore(sync_dir: Path) -> list[str]:
-    path = sync_dir / OBRISIGNORE
-    if not path.exists():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-    return [line for line in lines if line.strip() and not line.strip().startswith("#")]
 
 
 class ExclusionMatcher:
@@ -80,8 +83,6 @@ class ExclusionMatcher:
         self._sources: list[tuple[str, str]] = []
         for pat in DEFAULT_EXCLUDES:
             self._sources.append(("default", pat))
-        for pat in _read_obrisignore(self.sync_dir):
-            self._sources.append((OBRISIGNORE, pat))
         for pat in state_excludes or []:
             self._sources.append(("state", pat))
         self._spec = pathspec.PathSpec.from_lines(GitWildMatchPattern, [pat for _, pat in self._sources])
@@ -94,8 +95,8 @@ class ExclusionMatcher:
         """Return ``[(source_label, pattern), ...]`` for every pattern that matches.
 
         A path can match multiple patterns; this returns all of them in
-        source order (defaults → .obrisignore → state). Used for
-        diagnostics, not for the actual exclude decision.
+        source order (defaults → state). Used for diagnostics, not
+        for the actual exclude decision.
         """
         matched = []
         for label, pat in self._sources:

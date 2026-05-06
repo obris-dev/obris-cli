@@ -31,83 +31,59 @@ def register(sync):
     @sync.command("exclude")
     @click.argument("patterns", nargs=-1)
     @click.option("--path", "-p", default=".", help="Sync directory (defaults to current directory)")
-    @click.option("--list", "list_only", is_flag=True, help="Print current exclude patterns and exit")
+    @click.option("--list", "list_only", is_flag=True, help="Print current settings")
     def sync_exclude(patterns, path, list_only):
-        """Add file patterns to skip during sync.
-
-        Patterns use gitignore-style syntax. Examples:
+        """Stop syncing files that match a pattern.
 
         \b
-          obris sync exclude '*.draft.md'      # any markdown draft
-          obris sync exclude scratch/          # entire directory
-          obris sync exclude notes/private.md  # specific file
-          obris sync exclude --list            # show current patterns
+          obris sync exclude scratch/          # an entire folder
+          obris sync exclude notes.draft.md    # a specific file
+          obris sync exclude '*.draft.md'      # all drafts
+          obris sync exclude --list            # show current settings
 
-        Patterns apply to all topics syncing this directory. Idempotent —
-        adding a pattern twice is a no-op. Remove patterns with
-        'obris sync include <pattern>'.
+        Wins over any prior ``obris sync include`` for the same
+        pattern, so the user-facing rule stays simple: "the last
+        thing you said is what happens."
         """
         sync_dir, states = _states_for_current_dir(path)
 
         if list_only:
             if patterns:
                 raise click.UsageError("Cannot combine --list with patterns.")
-            for state, tid in states:
-                current = state.exclude_patterns
-                header = f"Excludes for {tid}:" if len(states) > 1 else "Current excludes:"
-                click.echo(header)
-                if not current:
-                    click.echo("  (none)")
-                else:
-                    for p in current:
-                        click.echo(f"  {p}")
+            _list_settings(states)
             return
 
         if not patterns:
             raise click.UsageError("Provide one or more patterns, or use --list.")
 
-        added_total = []
-        for state, _tid in states:
-            added = state.add_excludes(patterns)
-            if added:
-                state.save()
-                added_total.extend(added)
-
-        unique_added = sorted(set(added_total))
-        skipped = sorted(set(patterns) - set(unique_added))
-        if unique_added:
-            click.echo(f"Added {len(unique_added)} pattern(s): {', '.join(unique_added)}")
-            click.echo(f"  Excludes apply on next 'obris sync' in {sync_dir}/.")
-        if skipped:
-            click.echo(f"Already present: {', '.join(skipped)}")
+        results = _apply_pattern_action(states, patterns, action="exclude")
+        _emit_outcomes(sync_dir, results, action="exclude")
 
     @sync.command("include")
     @click.argument("patterns", nargs=-1, required=True)
     @click.option("--path", "-p", default=".", help="Sync directory (defaults to current directory)")
     def sync_include(patterns, path):
-        """Remove file patterns from the exclude list (re-enable syncing).
+        """Force a file or pattern to sync, overriding any exclusion.
 
-        Inverse of 'obris sync exclude'. Idempotent — removing a pattern
-        that isn't present is a no-op with a notice.
+        Use this whenever ``obris sync`` says a file is being skipped
+        and you actually want it. Works whether the file was being
+        excluded by a built-in default or by a prior
+        ``obris sync exclude``.
 
-          obris sync include '*.draft.md'
+        \b
+          obris sync include .env.example      # sync this even though
+                                                #  .env.* is excluded by default
+          obris sync include scratch/draft.md  # sync one file inside an
+                                                #  excluded folder
+          obris sync include '*.draft.md'      # un-exclude a pattern you
+                                                #  previously excluded
+
+        Wins over any prior ``obris sync exclude`` for the same pattern
+        — last call wins.
         """
         sync_dir, states = _states_for_current_dir(path)
-
-        removed_total = []
-        for state, _tid in states:
-            removed = state.remove_excludes(patterns)
-            if removed:
-                state.save()
-                removed_total.extend(removed)
-
-        unique_removed = sorted(set(removed_total))
-        not_present = sorted(set(patterns) - set(unique_removed))
-        if unique_removed:
-            click.echo(f"Removed {len(unique_removed)} pattern(s): {', '.join(unique_removed)}")
-            click.echo(f"  Will sync on next 'obris sync' in {sync_dir}/.")
-        if not_present:
-            click.echo(f"Not in exclude list: {', '.join(not_present)}")
+        results = _apply_pattern_action(states, patterns, action="include")
+        _emit_outcomes(sync_dir, results, action="include")
 
     @sync.command("untrack")
     @click.argument("targets", nargs=-1, required=True)
@@ -157,6 +133,107 @@ def register(sync):
         if not_found:
             click.echo(f"Not tracked: {', '.join(not_found)}", err=True)
             raise SystemExit(1)
+
+
+def _apply_pattern_action(states, patterns, *, action):
+    """Apply ``exclude`` or ``include`` to each pattern across all states.
+
+    Returns ``[(pattern, outcome)]`` where outcome is ``now_skipped``,
+    ``now_synced``, ``already_skipped``, or ``already_synced``.
+
+    The two actions are strict inverses with last-call-wins semantics
+    *and* exact-cancel: when the new action's inverse is already in
+    state, we simply remove that entry instead of layering an opposite
+    on top. Net effect, per pattern:
+
+    - prior ``foo`` + ``include foo``   → state minus ``foo``
+    - prior ``!foo`` + ``exclude foo``  → state minus ``!foo``
+    - empty + ``include foo``           → state plus ``!foo``
+    - empty + ``exclude foo``           → state plus ``foo``
+
+    Keeps the state list at most one entry per pattern, no leftover
+    re-include or exclude after a toggle.
+    """
+    outcomes = []
+    for state, _tid in states:
+        for pat in patterns:
+            negated = f"!{pat}"
+            current = list(state.exclude_patterns)
+            if action == "exclude":
+                if negated in current:
+                    # Cancel a prior include — just remove the override,
+                    # don't also add the exclude. Defaults will re-cover
+                    # the path if the override existed to override one;
+                    # if not, the include was a no-op and the exclude
+                    # is too.
+                    state.remove_excludes([negated])
+                    state.save()
+                    outcomes.append((pat, "now_skipped"))
+                elif pat in current:
+                    outcomes.append((pat, "already_skipped"))
+                else:
+                    state.add_excludes([pat])
+                    state.save()
+                    outcomes.append((pat, "now_skipped"))
+            else:
+                if pat in current:
+                    # Cancel a prior exclude — defaults take over (or
+                    # nothing was excluding it and the result is unchanged).
+                    state.remove_excludes([pat])
+                    state.save()
+                    outcomes.append((pat, "now_synced"))
+                elif negated in current:
+                    outcomes.append((pat, "already_synced"))
+                else:
+                    state.add_excludes([negated])
+                    state.save()
+                    outcomes.append((pat, "now_synced"))
+    return outcomes
+
+
+def _emit_outcomes(sync_dir, results, *, action):
+    """User-facing summary. No mention of state mechanics or `!pattern`."""
+    by_outcome: dict[str, set[str]] = {}
+    for pat, outcome in results:
+        by_outcome.setdefault(outcome, set()).add(pat)
+
+    changed_any = False
+    if action == "exclude":
+        if by_outcome.get("now_skipped"):
+            click.echo(f"Skipping: {', '.join(sorted(by_outcome['now_skipped']))}")
+            changed_any = True
+        if by_outcome.get("already_skipped"):
+            click.echo(f"Already skipping: {', '.join(sorted(by_outcome['already_skipped']))}")
+    else:
+        if by_outcome.get("now_synced"):
+            click.echo(f"Now syncing: {', '.join(sorted(by_outcome['now_synced']))}")
+            changed_any = True
+        if by_outcome.get("already_synced"):
+            click.echo(f"Already syncing: {', '.join(sorted(by_outcome['already_synced']))}")
+
+    if changed_any:
+        click.echo(f"  Takes effect on next 'obris sync' in {sync_dir}/.")
+
+
+def _list_settings(states):
+    """Print currently-configured rules for each state, grouped by intent."""
+    for state, tid in states:
+        current = state.exclude_patterns
+        header = f"Settings for {tid}:" if len(states) > 1 else "Current settings:"
+        click.echo(header)
+        if not current:
+            click.echo("  (none — built-in defaults apply)")
+            continue
+        skips = [p for p in current if not p.startswith("!")]
+        forced_syncs = [p[1:] for p in current if p.startswith("!")]
+        if skips:
+            click.echo("  Skipping:")
+            for p in skips:
+                click.echo(f"    {p}")
+        if forced_syncs:
+            click.echo("  Always syncing:")
+            for p in forced_syncs:
+                click.echo(f"    {p}")
 
 
 def _resolve_target(target, states):

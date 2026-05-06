@@ -24,6 +24,11 @@ import pathspec
 from pathspec.patterns.gitwildmatch import GitWildMatchPattern
 
 DEFAULT_EXCLUDES = [
+    # Obris's own in-dir state. Lives at ``<sync_dir>/.obris/`` and is
+    # never knowledge content. Self-excludes to avoid an infinite-loop
+    # of "the engine sees state files, would push them, server stores
+    # them, sync sees the new items..."
+    ".obris/",
     # VCS
     ".git/",
     ".hg/",

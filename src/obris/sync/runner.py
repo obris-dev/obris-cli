@@ -115,7 +115,7 @@ def run_sync_pass(
                     "remote_updated_at": meta.get("remote_updated_at"),
                 }
             )
-    _emit_scan(scan, sync_dir, add_all_files, verbose=verbose)
+    _emit_scan(scan, sync_dir, add_all_files, dry_run=dry_run, verbose=verbose)
 
     if add_all_files and scan.untracked and not dry_run:
         # All targets share the same sync_dir; bulk-add against the
@@ -141,14 +141,29 @@ def run_sync_pass(
     return totals
 
 
-def _emit_scan(scan, sync_dir, add_all_files, *, verbose=False):
+def _emit_scan(scan, sync_dir, add_all_files, *, dry_run=False, verbose=False):
     if not scan.untracked and not scan.symlinks and not (verbose and scan.excluded):
         return
     cap = None if verbose else _LIST_PREVIEW
     if scan.untracked:
-        click.echo(f"\n{len(scan.untracked)} untracked file(s) in {sync_dir}/:")
-        _print_capped(scan.untracked, cap)
-        if not add_all_files:
+        # Output is shaped by the (dry_run, add_all_files) combination so
+        # the user always knows whether the listed files would actually
+        # be uploaded:
+        #   dry-run + --add-all  → preview header ("Would add ...")
+        #   dry-run, no --add-all → preview header ("would not add")
+        #   live    + --add-all  → silent here (the real add path prints
+        #                          its own "Added N file(s)" summary)
+        #   live, no --add-all   → the existing "Choose how to proceed"
+        #                          prompt with the add/skip recipes.
+        if dry_run and add_all_files:
+            click.echo(f"\nWould add {len(scan.untracked)} file(s):")
+            _print_capped(scan.untracked, cap)
+        elif dry_run:
+            click.echo(f"\n{len(scan.untracked)} untracked file(s) (would not add — re-run with --add-all):")
+            _print_capped(scan.untracked, cap)
+        elif not add_all_files:
+            click.echo(f"\n{len(scan.untracked)} untracked file(s) in {sync_dir}/:")
+            _print_capped(scan.untracked, cap)
             click.echo("  Choose how to proceed:")
             click.echo("    Upload all:   obris sync --add-all")
             click.echo("    Upload some:  obris sync add <file>...")

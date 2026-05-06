@@ -1,8 +1,14 @@
 """Sync state persistence and manipulation.
 
-State is stored under ~/.obris/sync/, one file per (root topic, local path).
-State is keyed by knowledge_id (the remote item's primary key), not by
-filename. Renames on either side are metadata updates, not create+delete.
+State is stored in-place: ``<sync_dir>/.obris/<topic_id>.json``, one
+file per root topic. When the user deletes the sync dir, state goes
+with it — clean lifecycle, no orphaned global state, no cross-machine
+collisions when two laptops happen to share a path. Mirrors git's
+``.git/`` pattern.
+
+State is keyed by knowledge_id (the remote item's primary key), not
+by filename. Renames on either side are metadata updates, not
+create+delete.
 
 Subtopic support: one state file per *root* topic covers the entire
 subtree. topic_dirs maps topic_id -> relative directory (POSIX-style)
@@ -10,26 +16,39 @@ under local_path. The CLI only syncs root topics (parent_id = NULL);
 child topics are not valid sync targets on their own.
 """
 
-import hashlib
 import json
 from pathlib import Path
-
-from obris.config import CONFIG_DIR
 
 from .mapping import now_iso
 from .models import TrackedItem
 
-SYNC_DIR = CONFIG_DIR / "sync"
+# In-dir state directory name. Excluded by ``DEFAULT_EXCLUDES`` so the
+# engine never tries to sync state files as knowledge.
+STATE_DIR_NAME = ".obris"
 
 
-def _state_key(topic_id, local_path):
-    """Deterministic short hash for a (topic_id, local_path) pair."""
-    raw = f"{topic_id}:{Path(local_path).resolve()}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+def _state_dir(local_path) -> Path:
+    return Path(local_path).resolve() / STATE_DIR_NAME
 
 
-def _state_path(topic_id, local_path):
-    return SYNC_DIR / f"{_state_key(topic_id, local_path)}.json"
+def _state_path(topic_id, local_path) -> Path:
+    return _state_dir(local_path) / f"{topic_id}.json"
+
+
+def _ensure_state_dir(local_path) -> Path:
+    """Create ``<sync_dir>/.obris/`` and seed a self-excluding ``.gitignore``.
+
+    The ``*`` line keeps the state dir out of git/svn checkouts of
+    the user's project — same trick git uses for ``.git/info``.
+    Idempotent: ``mkdir(parents=True, exist_ok=True)`` and we only
+    write the gitignore when missing.
+    """
+    state_dir = _state_dir(local_path)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    gitignore = state_dir / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text("*\n")
+    return state_dir
 
 
 def _read(path):
@@ -74,21 +93,24 @@ class SyncState:
     def find_all_for_path(cls, local_path):
         """Find all states for the given local path.
 
-        Returns list of (SyncState, topic_id) tuples.
+        Walks ``<local_path>/.obris/*.json``. Returns ``[]`` when the
+        state dir doesn't exist yet (fresh, never-synced directory).
         """
-        resolved = str(Path(local_path).resolve())
-        if not SYNC_DIR.exists():
+        resolved = Path(local_path).resolve()
+        state_dir = resolved / STATE_DIR_NAME
+        if not state_dir.exists():
             return []
         results = []
-        for f in SYNC_DIR.glob("*.json"):
+        for f in sorted(state_dir.glob("*.json")):
             data = _read(f)
-            if data and data.get("local_path") == resolved:
-                topic_id = data.get("topic_id")
-                results.append((cls(topic_id, local_path, data), topic_id))
+            if not data:
+                continue
+            topic_id = data.get("topic_id") or f.stem
+            results.append((cls(topic_id, local_path, data), topic_id))
         return results
 
     def save(self):
-        SYNC_DIR.mkdir(parents=True, exist_ok=True)
+        _ensure_state_dir(self.local_path)
         path = _state_path(self.topic_id, self.local_path)
         tmp = path.with_suffix(".tmp")
         data = {

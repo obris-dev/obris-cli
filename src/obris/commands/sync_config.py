@@ -1,6 +1,6 @@
 """Per-checkout sync configuration subcommands.
 
-Hosts ``exclude`` / ``include`` / ``untrack`` — commands that modify
+Hosts ``exclude`` / ``include`` / ``unlink`` — commands that modify
 state-file metadata for a synced directory. Kept out of
 ``commands.sync`` so the sync group definition + invocation logic
 stays under the 300-line cap and these subcommands stay together
@@ -88,26 +88,26 @@ def register(sync):
         results = _apply_pattern_action(states, patterns, action="include", sync_dir=sync_dir)
         _emit_outcomes(sync_dir, results, action="include")
 
-    @sync.command("untrack")
+    @sync.command("unlink")
     @click.argument("targets", nargs=-1, required=True)
     @click.option("--path", "-p", default=".", help="Sync directory (defaults to current directory)")
-    def sync_untrack(targets, path):
-        """Stop syncing items without deleting either side.
+    def sync_unlink(targets, path):
+        """Break the local-to-remote sync link without deleting either side.
 
-        Each TARGET is a knowledge ID or a tracked filename (basename).
+        Each TARGET is a knowledge ID or a linked filename (basename).
         Removes the sync link; both the local file and the remote item stay
         in place. Subsequent 'obris sync' calls will not re-pull these items.
 
         \b
-          obris sync untrack abc123
-          obris sync untrack notes.md draft.md
+          obris sync unlink abc123
+          obris sync unlink notes.md draft.md
 
         Re-link later with 'obris sync link <file> -i <id>' or 'obris sync add'.
         Permanently delete the remote with 'obris knowledge delete <id>'.
         """
         sync_dir, states = _states_for_current_dir(path)
 
-        untracked = []
+        unlinked = []
         not_found = []
         for target in targets:
             matches = _resolve_target(target, states)
@@ -115,7 +115,7 @@ def register(sync):
                 not_found.append(target)
                 continue
             if len(matches) > 1:
-                click.echo(f"Ambiguous: '{target}' matches multiple tracked items:")
+                click.echo(f"Ambiguous: '{target}' matches multiple linked items:")
                 for state, kid in matches:
                     entry = state.get(kid)
                     click.echo(f"  {kid}  ({entry.filename})")
@@ -126,15 +126,15 @@ def register(sync):
             state.untrack(kid)
             state.mark_unlinked(kid)
             state.save()
-            untracked.append((kid, entry.filename))
+            unlinked.append((kid, entry.filename))
 
-        if untracked:
-            click.echo(f"Untracked {len(untracked)} item(s):")
-            for kid, name in untracked:
+        if unlinked:
+            click.echo(f"Unlinked {len(unlinked)} item(s):")
+            for kid, name in unlinked:
                 click.echo(f"  {name}  ({kid})")
             click.echo(f"  Local files and remote items unchanged in {sync_dir}/.")
         if not_found:
-            click.echo(f"Not tracked: {', '.join(not_found)}", err=True)
+            click.echo(f"Not linked: {', '.join(not_found)}", err=True)
             raise SystemExit(1)
 
 

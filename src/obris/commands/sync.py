@@ -69,6 +69,15 @@ def sync(ctx, path, topic_id, item_ids, include_patterns, dry_run, add_all_files
 
     targets = resolve_targets(sync_dir, topic_id, no_create=no_create, dry_run=dry_run)
 
+    if add_all_files and len(targets) > 1:
+        topic_ids = [t[1] for t in targets]
+        raise click.UsageError(
+            "--add-all is ambiguous when multiple topics are linked to this "
+            "directory. Pass --topic <id> to scope it to one topic, or use "
+            "'obris sync add <file> -t <id>' to add files one at a time.\n"
+            f"  Linked topics: {', '.join(topic_ids)}"
+        )
+
     if not targets:
         # dry-run + no state + no --topic: preview the bootstrap +
         # initial-add locally without creating a phantom server topic.
@@ -215,7 +224,7 @@ def sync_link(file, item_id, topic_id):
     click.echo(f'Linked "{filepath.name}" to item {item_id}')
 
 
-# Per-checkout configuration subcommands (exclude / include / untrack)
+# Per-checkout configuration subcommands (exclude / include / unlink)
 # and the conflicts subgroup live in separate modules to keep this
 # file under the 300-line cap.
 _register_config_subcommands(sync)

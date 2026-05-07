@@ -139,13 +139,14 @@ def run_sync_pass(
         _print_capped(out_of_include_scope, cap)
 
     if add_all_files and scan.untracked and not dry_run:
-        # All targets share the same sync_dir; bulk-add against the
-        # first state's root. Multi-root dirs are an edge case we
-        # don't optimize for here.
-        first_state, root_id = fresh_states[0]
+        # Bulk-add into the resolved target. The CLI rejects --add-all
+        # in multi-topic directories without an explicit --topic, so by
+        # the time we get here ``targets`` has exactly one entry.
+        target_tid = targets[0][1]
+        target_state = next(s for s, tid in fresh_states if tid == target_tid)
         counts = add_all(
-            first_state,
-            root_id,
+            target_state,
+            target_tid,
             sync_dir,
             scan.untracked,
             allow_subtopics=allow_subtopics,

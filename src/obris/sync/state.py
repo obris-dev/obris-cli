@@ -237,7 +237,7 @@ class SyncState:
     def mark_unlinked(self, knowledge_id):
         """Record that ``knowledge_id`` should not be auto-re-pulled.
 
-        Used by ``obris sync untrack`` so subsequent syncs don't yank
+        Used by ``obris sync unlink`` so subsequent syncs don't yank
         the remote copy back down. Cleared automatically by ``track``.
         """
         if knowledge_id and knowledge_id not in self._unlinked_ids:

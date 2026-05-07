@@ -78,7 +78,7 @@ def sync_tracked_item(topic_id, item, entry, state, sync_dir, desired_rel, *, dr
         click.echo(f"  Missing locally: {display}  (knowledge_id {item.id})")
         click.echo("    Options:")
         click.echo(f"      obris sync link <new-path> -i {item.id}    # moved or renamed")
-        click.echo(f"      obris sync untrack {item.id}               # keep both copies, stop syncing")
+        click.echo(f"      obris sync unlink {item.id}                 # keep both copies, break the link")
         click.echo(f"      obris knowledge delete {item.id}           # remove the remote item")
         return MISSING
 

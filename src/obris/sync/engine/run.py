@@ -128,7 +128,7 @@ def run_sync(
             continue
         seen_ids.add(item.id)
         if state.is_unlinked(item.id):
-            # User ran 'obris sync untrack' on this id. Leave the
+            # User ran 'obris sync unlink' on this id. Leave the
             # remote alone, don't pull, don't surface — they
             # explicitly opted out of syncing this item.
             continue

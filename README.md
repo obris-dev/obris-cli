@@ -43,6 +43,7 @@ Opens a browser to log in. The CLI waits, you authorize, done. Works from any ma
 | `obris sync [path]` | Sync a directory with an Obris topic |
 | `obris sync add <file>` | Add a local file to a synced topic |
 | `obris sync link <file> -i <id>` | Relink a renamed file |
+| `obris sync unlink <file-or-id>` | Break the local-to-remote sync link |
 | `obris topic list` | List all topics |
 | `obris topic view <id>` | View a topic and its knowledge items |
 | `obris knowledge view <id>` | View a knowledge item |

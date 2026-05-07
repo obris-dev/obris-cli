@@ -1,9 +1,9 @@
 <p align="center">
   <a href="https://obris.ai">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="../.github/assets/obris-logo-light.svg">
-      <source media="(prefers-color-scheme: light)" srcset="../.github/assets/obris-logo-dark.svg">
-      <img src="../.github/assets/obris-logo-dark.svg" alt="Obris" width="200">
+      <source media="(prefers-color-scheme: dark)" srcset="./.assets/obris-logo-light.svg">
+      <source media="(prefers-color-scheme: light)" srcset="./.assets/obris-logo-dark.svg">
+      <img src="./.assets/obris-logo-dark.svg" alt="Obris" width="200">
     </picture>
   </a>
 </p>
@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://pypi.org/project/obris-cli/"><img src="https://img.shields.io/pypi/v/obris-cli.svg" alt="PyPI"></a>
-  <a href="https://github.com/obris-dev/obris/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/obris-dev/obris-cli/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
 </p>
 
 ## Install
@@ -29,7 +29,7 @@ pip install obris-cli
 obris auth login
 ```
 
-Opens a browser to log in. The CLI waits, you authorize, done. Works from any machine — the login URL can be opened on any device with a browser. Connects to Obris Cloud by default. See [Selfhosted](#selfhosted) for your own instance.
+Opens a browser to log in. The CLI waits, you authorize, done. Works from any machine: the login URL can be opened on any device with a browser. Connects to Obris Cloud by default. See [Selfhosted](#selfhosted) for your own instance.
 
 ## Commands
 

@@ -29,7 +29,7 @@ pip install obris-cli
 obris auth login
 ```
 
-Opens a browser to log in. The CLI waits, you authorize, done. Works from any machine: the login URL can be opened on any device with a browser. Connects to Obris Cloud by default. See [Selfhosted](#selfhosted) for your own instance.
+Opens a browser to log in. The CLI waits, you authorize, done. Works from any machine: the login URL can be opened on any device with a browser. Connects to Obris Cloud by default.
 
 ## Commands
 
@@ -52,17 +52,8 @@ Opens a browser to log in. The CLI waits, you authorize, done. Works from any ma
 | `obris env list` | List all environments |
 | `obris env view [name]` | Show environment details |
 | `obris env use <name>` | Set the default environment |
-| `obris env add <name> --url <url>` | Add a selfhosted instance |
+| `obris env add <name> --url <url>` | Add a custom environment |
 | `obris env remove <name>` | Remove an environment |
-
-## Selfhosted
-
-Point the CLI at your own Obris instance:
-
-```bash
-obris env add myserver --url https://obris.example.com
-obris --env myserver auth login
-```
 
 ## JSON output
 
